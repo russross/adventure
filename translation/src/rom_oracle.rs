@@ -181,7 +181,7 @@ enum Op {
 impl Cpu {
     pub fn new() -> Self {
         let mut memory = Box::new([0; 65536]);
-        memory[0xf000..].copy_from_slice(include_bytes!("../ADVNTURE.BIN"));
+        memory[0xf000..].copy_from_slice(include_bytes!("../../ADVNTURE.BIN"));
         Self {
             memory,
             a: 0,

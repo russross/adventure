@@ -49,27 +49,27 @@ fn patterns_mirror_or_repeat_and_duplicate_scaled_sprites() {
     tia.first_object.duplicate(Copies::TripleMedium);
     tia.first_object_row(0x80);
     tia.horizontal_sync();
-    for x in [11, 43, 75] {
+    for x in [10, 42, 74] {
         assert_eq!(
             &tia.frame.pixels[WIDTH * 2 + x..WIDTH * 2 + x + 2],
             &[72; 2]
         );
     }
-    assert_eq!(tia.frame.pixels[WIDTH * 2 + 10], 0);
-    assert_eq!(tia.frame.pixels[WIDTH * 2 + 13], 0);
+    assert_eq!(tia.frame.pixels[WIDTH * 2 + 9], 0);
+    assert_eq!(tia.frame.pixels[WIDTH * 2 + 12], 0);
 }
 
 #[test]
 fn enlarged_sprite_edges_shift_and_wrap_in_both_slots() {
     let cases: &[(u8, Scale, &[usize])] = &[
-        (158, Scale::Normal, &[5, 158]),
-        (158, Scale::Double, &[0, 13, 14, 159]),
-        (158, Scale::Quadruple, &[0, 1, 2, 27, 28, 29, 30, 159]),
-        (159, Scale::Double, &[0, 1, 14, 15]),
-        (159, Scale::Quadruple, &[0, 1, 2, 3, 28, 29, 30, 31]),
-        (255, Scale::Double, &[96, 97, 110, 111]),
-        (255, Scale::Quadruple, &[96, 97, 98, 99, 124, 125, 126, 127]),
-        (159, Scale::Normal, &[6, 159]),
+        (158, Scale::Normal, &[4, 157]),
+        (158, Scale::Double, &[12, 13, 158, 159]),
+        (158, Scale::Quadruple, &[0, 1, 26, 27, 28, 29, 158, 159]),
+        (159, Scale::Double, &[0, 13, 14, 159]),
+        (159, Scale::Quadruple, &[0, 1, 2, 27, 28, 29, 30, 159]),
+        (255, Scale::Double, &[27, 28, 41, 42]),
+        (255, Scale::Quadruple, &[27, 28, 29, 30, 55, 56, 57, 58]),
+        (159, Scale::Normal, &[5, 158]),
     ];
 
     // Both ends of a sparse bitmap expose clipping, bit order, and the screen seam.
@@ -105,7 +105,7 @@ fn enlarged_sprite_edges_shift_and_wrap_in_both_slots() {
 
 #[test]
 fn wrapped_wide_sprite_contacts_follow_shifted_pixels_even_behind_walls() {
-    for (x, touching) in [(159, false), (0, true), (3, true), (4, false)] {
+    for (x, touching) in [(159, false), (1, true), (4, true), (5, false)] {
         let mut tia = Tia::default();
         tia.blank(false);
         tia.foreground(28);
@@ -115,16 +115,65 @@ fn wrapped_wide_sprite_contacts_follow_shifted_pixels_even_behind_walls() {
         tia.player.enable(true);
         tia.player.reposition(x);
 
-        // The enlarged delayed sprite occupies pixels 0..3 after wrapping from x=159.
+        // The wide delayed sprite occupies 159,0,1,2; the solid player's origin differs.
         tia.second_object.reposition(159);
         tia.second_object.scale(Scale::Quadruple);
         tia.second_object.delay_rows(true);
         tia.second_object.set_row(0x80);
-        tia.first_object.reposition(x);
+        tia.first_object.reposition(x.wrapping_sub(1));
         tia.first_object_row(0x80);
         tia.horizontal_sync();
         assert_eq!(tia.contacts.player_objects, [true, touching], "x={x}");
         assert_eq!(tia.contacts.objects_touch, touching, "x={x}");
         assert_eq!(&tia.frame.pixels[..4], &[28; 4]);
     }
+}
+
+#[test]
+fn cartridge_positions_match_stella_across_screen_and_scanline_edges() {
+    let cases = [
+        (0, 159),
+        (1, 0),
+        (32, 31),
+        (80, 79),
+        (159, 158),
+        (164, 3),
+        (165, 156),
+        (179, 10),
+        (225, 156),
+        (239, 10),
+        (240, 11),
+        (255, 26),
+    ];
+    for (coordinate, expected) in cases {
+        let mut tia = Tia::default();
+        tia.blank(false);
+        tia.first_object.reposition(coordinate);
+        tia.first_object.set_color(72);
+        tia.first_object_row(0x80);
+        tia.horizontal_sync();
+        let pixels: Vec<_> = tia.frame.pixels[..WIDTH]
+            .iter()
+            .enumerate()
+            .filter_map(|(x, &color)| (color == 72).then_some(x))
+            .collect();
+        assert_eq!(pixels, [expected], "coordinate {coordinate}");
+    }
+}
+
+#[test]
+fn solid_and_sprite_origins_change_contact_at_their_true_edges() {
+    let mut tia = Tia::default();
+    tia.blank(false);
+    tia.player.reposition(80);
+    tia.player.set_width(1);
+    tia.player.enable(true);
+    tia.first_object.reposition(80);
+    tia.first_object_row(0x80);
+    tia.horizontal_sync();
+    assert!(!tia.contacts.player_objects[0]);
+    tia.first_object.reposition(79);
+    tia.clear_contacts();
+    tia.horizontal_sync();
+    assert!(tia.contacts.player_objects[0]);
 }

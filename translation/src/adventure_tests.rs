@@ -376,7 +376,7 @@ fn bat_gates_magnet_and_darkness_match_rom() {
 
 #[test]
 fn visible_selection_and_every_object_image_range_match_rom() {
-    let rom = include_bytes!("../ADVNTURE.BIN");
+    let rom = include_bytes!("../../ADVNTURE.BIN");
     for room in ROOM_IDS {
         let mut port = initialized(Game::Two);
         port.ram.player.room = room;
@@ -606,4 +606,16 @@ fn functional_kernel_matches_rom_output_order_for_every_room() {
         );
         assert_eq!(game.tia.contacts, raster.tia.contacts, "{room:?}: contacts");
     }
+}
+
+#[test]
+fn initial_game_one_picture_matches_stella_pixels() {
+    let mut game = initialized(Game::One);
+    game.position_side_barriers();
+    game.ram.player = Position::new(Room::GoldCastle, 80, 32);
+    game.ram.safe_player = game.ram.player;
+    game.prepare_room_display();
+    game.draw_room();
+    let expected = include_bytes!("../../tests/stella-game-one.pixels");
+    assert_eq!(&game.tia.frame.pixels[..expected.len()], expected);
 }

@@ -50,30 +50,26 @@ verify: all
 check: lint rust-check
 	$(MAKE) verify DASM="$(DASM)" PYTHON="$(PYTHON)"
 
-# Cargo owns Rust source and settings dependencies in its standard target directory.
-Cargo.lock: Cargo.toml
-	$(CARGO) generate-lockfile
-	touch $@
+# Each Rust implementation owns its build directory and dependency tracking.
+rust:
+	$(MAKE) -C translation all
 
-rust: Cargo.lock
-	$(CARGO) build --locked --bin adventure
+rust-release:
+	$(MAKE) -C translation release
 
-rust-release: Cargo.lock
-	$(CARGO) build --locked --release --bin adventure
-
-rust-check: Cargo.lock
-	$(CARGO) fmt --check
-	$(CARGO) clippy --locked --all-targets -- -D warnings
-	$(CARGO) test --locked
+rust-check:
+	$(MAKE) -C translation check
 
 run: rust-release
-	target/release/adventure $(ARGS)
+	translation/target/release/adventure $(ARGS)
 
 .PHONY: rust-smoke
-rust-smoke: Cargo.lock
-	$(CARGO) run --locked --bin sdl_smoke
+rust-smoke:
+	$(MAKE) -C translation smoke
 
 mostlyclean:
+	$(MAKE) -C translation mostlyclean
+	$(MAKE) -C refactored mostlyclean
 	rm -f build/adventure.lst build/adventure.sym build/control-flow.json build/control-flow.json.tmp build/data-labels.json
 	rm -f build/adventure-gameplay.lst build/adventure-gameplay.sym
 	rm -rf tools/__pycache__ .tools/dasm-2.20.17 .tools/dasm.tar.gz
@@ -81,4 +77,22 @@ mostlyclean:
 	rm -f target/release/*.d target/.rustc_info.json target/rust-smoke.bmp target/rust-smoke.png
 
 clean: mostlyclean
+	$(MAKE) -C translation clean
 	rm -rf build target .tools
+
+# The independent refactor shares no runtime code with the preserved translation.
+.PHONY: refactored refactored-release refactored-check refactored-run refactored-smoke
+refactored:
+	$(MAKE) -C refactored all
+
+refactored-release:
+	$(MAKE) -C refactored release
+
+refactored-check:
+	$(MAKE) -C refactored check
+
+refactored-run:
+	$(MAKE) -C refactored run ARGS="$(ARGS)"
+
+refactored-smoke:
+	$(MAKE) -C refactored smoke

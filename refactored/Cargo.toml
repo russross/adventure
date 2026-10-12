@@ -1,0 +1,15 @@
+[package]
+name = "adventure-refactored"
+version = "0.1.0"
+edition = "2024"
+default-run = "refactored"
+
+[[bin]]
+name = "refactored"
+path = "src/main.rs"
+
+[dependencies]
+sdl2 = { version = "0.38", features = ["use-pkgconfig"] }
+
+[dev-dependencies]
+adventure-port = { path = "../translation" }

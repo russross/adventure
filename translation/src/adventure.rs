@@ -1248,16 +1248,15 @@ impl Adventure {
             return;
         }
         let mut position = self.ram.position(record);
-        let exit;
-        if (position.y.wrapping_sub(106) as i8) >= 0 {
+        let exit = if (position.y.wrapping_sub(106) as i8) >= 0 {
             position.y = 13;
-            exit = 0;
+            0
         } else if position.x < 3 || position.x >= 240 {
             position.x = if record == RecordId::Player { 158 } else { 154 };
-            exit = 3;
+            3
         } else if position.y < 13 {
             position.y = 105;
-            exit = 2;
+            2
         } else if record == RecordId::Player {
             if position.x < 159 {
                 return;
@@ -1269,14 +1268,14 @@ impl Adventure {
                 return;
             }
             position.x = 3;
-            exit = 1;
+            1
         } else {
             if position.x < 155 {
                 return;
             }
             position.x = 3;
-            exit = 1;
-        }
+            1
+        };
         let destination = self.find_room_record(position.room).exits[exit];
         position.room = self.resolve_game_exit(destination);
         *self.ram.position_mut(record) = position;

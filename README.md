@@ -1,13 +1,33 @@
-Adventure functional port
-=========================
+Adventure Rust ports
+====================
 
-Run the Rust game:
+Run the refactored game:
 
-    make run
+    make refactored-run
 
-SDL2, `pkg-config`, and Rust are required. Cargo uses the installed SDL2 library through the `sdl2` crate; no SDL source build is needed. `make rust` builds `target/debug/adventure`. `make run` builds and launches `target/release/adventure` with release optimizations. The executable uses compiled world and graphics data and does not read a ROM file at runtime.
+`translation/` keeps the Rust translation in ROM order. `refactored/` is an independent Rust implementation organized around world records, movement, actor behavior, interactions, picture scheduling, and immutable game assets. Its hardware interface accepts complete scanlines instead of persistent drawable operations. Both versions retain line-by-line rendering, the three-picture gameplay cycle, and frame-boundary pacing.
 
-`src/adventure.rs` contains the named RAM records, translated subroutines in assembly order, and static graphics/world data in their corresponding source locations. `src/tia.rs` composes scanlines and collects contacts using persistent drawable objects. `src/hardware.rs` presents completed frames, queues mono audio through SDL, and samples controls. `src/sound.rs` generates both TIA sound channels, including their tone and noise modes, with persistent oscillator phase. Sound controls are applied at frame boundaries; CPU timing and analog circuitry are not emulated.
+SDL2, `pkg-config`, and Rust are required. Normal execution uses compiled assets and does not read a cartridge file. The preserved assembly editions and analysis tools reside in `original/`.
+
+
+Build and checks
+----------------
+
+    make refactored
+    make refactored-check
+    make refactored-smoke
+
+`refactored-check` runs formatting, Clippy with warnings as errors, and behavioral tests. The test-only ROM fixture is assembled from the preserved assembly and checked against its known hash. Tests compare game behavior with the ROM and exact frame/state sequences with the preserved Rust translation. DASM is built through the existing local tool rule when needed for checks.
+
+The SDL smoke runner opens a window, injects controls to retrieve the Gold Key, checks audio, mute, and window resizing, saves `target/refactored-smoke.bmp`, and closes automatically. Build outputs reside in `target/refactored/`. `make refactored-run` builds the release executable before launching it.
+
+For a bounded run or BMP capture:
+
+    make refactored-run ARGS='--frames 120 --snapshot target/refactored.bmp'
+
+`--unpaced` disables frame pacing for automated runs. The normal host targets 60 presentations per second; scanline drawing never sleeps. `make -C refactored mostlyclean` preserves the release executable while removing intermediates. `make -C refactored clean` removes that executable as well.
+
+`make run`, `make rust-check`, and `make rust-smoke` build, check, and exercise the translation through its own Makefile. Both versions use calibrated object placement checked against an independent Stella capture. The root assembly and analysis targets still refer to the layout before those sources moved into `original/`.
 
 
 Controls
@@ -26,25 +46,6 @@ Controls
 | Window size 1x/2x/3x   | 1 / 2 / 3 (number row)             |
 | Quit                   | Escape; Ctrl+Q; Cmd+Q              |
 
-A compact control reference prints to the console at startup and with `--help`. Window size shortcuts restore 320×194, 640×388, or 960×582 pixels after manual resizing; the initial size is 2x. Mute silences playback while game effects and oscillator phase continue.
+Both difficulty switches start at B; the display starts in color at 2x size. Window shortcuts restore 320×194, 640×388, or 960×582 pixels. Muting preserves game effects and oscillator phase. The right joystick uses Y/H/G/J and F; its movement also affects inactivity.
 
-Both difficulty switches start at B and the display starts in color. The right joystick's Stella keys are also mapped: Y/H/G/J for up/down/left/right and F for fire. Adventure uses the left joystick to move the player; either joystick's movement affects its inactivity counter.
-
-The core mappings follow [Stella's keyboard layout](https://stella-emu.github.io/docs/index.html#Keyboard). Tab and Enter are the requested additional Select and Reset aliases.
-
-
-Checks and bounded runs
------------------------
-
-    make rust-check
-    make rust-smoke
-
-`rust-check` uses debug builds and runs formatting, Clippy with warnings treated as errors, then tests. A test-only ROM executor compares persistent game behavior and drives the original kernel's output sequence through the functional TIA interface. It is excluded from the running game. `rust-smoke` runs `src/bin/sdl_smoke.rs` in debug mode, opens an SDL window, sends real SDL key events to start the game and retrieve the Gold Key and checks its pickup audio, mute toggling, key repeat, and all three window sizes, saves `target/rust-smoke.bmp`, and closes automatically.
-
-For a bounded executable run or a BMP capture:
-
-    make run ARGS='--frames 120 --snapshot target/adventure.bmp'
-
-`--unpaced` disables the vertical-sync pause for automated runs. Otherwise the executable presents at 60 frames per second. Horizontal synchronization only paints into the frame buffer. The display retains the original two-slot object rotation and row staging; it does not model CPU cycles, sub-line register deadlines, timer prescalers, horizontal positioning delays, or analog television effects.
-
-`adventure.asm` remains the address-labeled baseline, and `adventure-gameplay.asm` remains the gameplay-oriented assembly edition. `make check` checks both assembly editions and the Rust port. `SEMANTICS.md` describes their workflows and invariants.
+The detailed contracts are in [SEMANTICS.md](SEMANTICS.md) and [refactored/SEMANTICS.md](refactored/SEMANTICS.md). The refactor's entry points are [game/lifecycle.rs](refactored/src/game/lifecycle.rs), [game/rendering.rs](refactored/src/game/rendering.rs), and [video.rs](refactored/src/video.rs).

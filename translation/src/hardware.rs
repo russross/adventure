@@ -252,7 +252,13 @@ impl FrameHost for SdlHardware {
         }
 
         // Expand indexed colors only when the complete picture reaches the SDL boundary.
-        for (pixel, color) in self.rgb.chunks_exact_mut(3).zip(&frame.pixels) {
+        for (pixel, color) in self
+            .rgb
+            .as_chunks_mut::<3>()
+            .0
+            .iter_mut()
+            .zip(&frame.pixels)
+        {
             pixel.copy_from_slice(&rgb_color(*color));
         }
         let creator = self.canvas.texture_creator();

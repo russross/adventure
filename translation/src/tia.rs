@@ -117,7 +117,7 @@ impl Default for Sprite {
 
 impl Sprite {
     pub fn reposition(&mut self, x: u8) {
-        self.x = i16::from(x);
+        self.x = positioned_object_x(x);
     }
     pub fn set_color(&mut self, color: u8) {
         self.color = color;
@@ -174,7 +174,7 @@ impl SolidObject {
         }
     }
     pub fn reposition(&mut self, x: u8) {
-        self.x = i16::from(x);
+        self.x = positioned_object_x(x) - 1;
     }
     pub fn set_width(&mut self, width: u8) {
         self.width = width;
@@ -185,6 +185,16 @@ impl SolidObject {
 
     fn covers(self, x: usize) -> bool {
         self.enabled && (x as i16 - self.x).rem_euclid(WIDTH as i16) < i16::from(self.width)
+    }
+}
+
+// Adventure's positioning routine gives sprites a different origin from solid drawables.
+// Large byte coordinates move the reset into horizontal blanking or the following line.
+fn positioned_object_x(x: u8) -> i16 {
+    match x {
+        0..=164 => i16::from(x) - 1,
+        165..=239 => i16::from(x % 15) - 4,
+        240..=255 => i16::from(x) - 229,
     }
 }
 
