@@ -44,6 +44,21 @@ pub enum Room {
     RobinettCredits,
 }
 
+impl Room {
+    fn is_dark(self) -> bool {
+        matches!(
+            self,
+            Self::CatacombsCenter
+                | Self::CatacombsEntrance
+                | Self::CatacombsSide
+                | Self::BlackMaze13
+                | Self::BlackMaze14
+                | Self::BlackMazeDot
+                | Self::BlackMazeEntrance
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ObjectId {
@@ -121,6 +136,32 @@ impl Position {
     }
 }
 
+impl ObjectId {
+    // Scenery has no movable record. Empty retains the bridge position for display selection.
+    fn record(self) -> Option<RecordId> {
+        match self {
+            Self::Light => Some(RecordId::Light),
+            Self::Rhindle => Some(RecordId::Rhindle),
+            Self::Yorgle => Some(RecordId::Yorgle),
+            Self::Grundle => Some(RecordId::Grundle),
+            Self::Sword => Some(RecordId::Sword),
+            Self::Bridge | Self::Empty => Some(RecordId::Bridge),
+            Self::GoldKey => Some(RecordId::GoldKey),
+            Self::WhiteKey => Some(RecordId::WhiteKey),
+            Self::BlackKey => Some(RecordId::BlackKey),
+            Self::Bat => Some(RecordId::Bat),
+            Self::Dot => Some(RecordId::Dot),
+            Self::Chalice => Some(RecordId::Chalice),
+            Self::Magnet => Some(RecordId::Magnet),
+            Self::GoldGate
+            | Self::WhiteGate
+            | Self::BlackGate
+            | Self::Credits
+            | Self::GameNumber => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Game {
     #[default]
@@ -130,13 +171,6 @@ pub enum Game {
 }
 
 impl Game {
-    fn index(self) -> usize {
-        match self {
-            Self::One => 0,
-            Self::Two => 1,
-            Self::Three => 2,
-        }
-    }
     fn next(self) -> Self {
         match self {
             Self::One => Self::Two,
@@ -156,14 +190,6 @@ pub enum DragonState {
 }
 
 impl DragonState {
-    fn value(self) -> u8 {
-        match self {
-            Self::Wandering => 0,
-            Self::Dead => 1,
-            Self::Swallowed => 2,
-            Self::Biting(value) => value,
-        }
-    }
     fn from_value(value: u8) -> Self {
         match value {
             0 => Self::Wandering,
@@ -252,11 +278,27 @@ pub enum GateId {
 }
 
 impl GateId {
-    fn index(self) -> usize {
+    // Each castle binds its gate and key to the rooms on either side of the entrance.
+    fn castle(self) -> (ObjectId, ObjectId, Room, Room) {
         match self {
-            Self::Gold => 0,
-            Self::White => 1,
-            Self::Black => 2,
+            Self::Gold => (
+                ObjectId::GoldGate,
+                ObjectId::GoldKey,
+                Room::GoldTreasury,
+                Room::GoldCastle,
+            ),
+            Self::White => (
+                ObjectId::WhiteGate,
+                ObjectId::WhiteKey,
+                Room::WhiteCastleInterior,
+                Room::WhiteCastle,
+            ),
+            Self::Black => (
+                ObjectId::BlackGate,
+                ObjectId::BlackKey,
+                Room::BlackCastleInterior,
+                Room::BlackCastle,
+            ),
         }
     }
 }
@@ -294,21 +336,6 @@ enum SoundEffect {
     DragonSlain,
     Drop,
     Pickup,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum Creature {
-    Dragon(DragonId),
-    Bat,
-}
-
-impl Creature {
-    fn record(self) -> RecordId {
-        match self {
-            Self::Dragon(dragon) => dragon.record(),
-            Self::Bat => RecordId::Bat,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,22 +479,23 @@ impl World {
 #[derive(Clone, Copy, Debug)]
 struct Bitmap {
     rows: &'static [u8],
-    start: usize,
 }
 
 impl Bitmap {
     const fn new(rows: &'static [u8]) -> Self {
-        Self { rows, start: 0 }
+        Self { rows }
     }
     fn row(self, index: usize) -> u8 {
-        self.rows.get(self.start + index).copied().unwrap_or(0)
+        self.rows.get(index).copied().unwrap_or(0)
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ImageChoice {
-    ceiling: u8,
+struct ObjectDisplay {
+    position: Position,
     bitmap: Bitmap,
+    color: u8,
+    width: SpriteWidth,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -476,84 +504,12 @@ enum ColorChoice {
     Cycling,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum PositionSource {
-    Record(RecordId),
-    Fixed(Position),
-}
-
-#[derive(Clone, Copy, Debug)]
-enum StateSource {
-    Fixed(u8),
-    Dragon(DragonId),
-    Gate(GateId),
-    GameNumber,
-    BatAnimation,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ObjectDescriptor {
-    position: PositionSource,
-    state: StateSource,
-    images: &'static [ImageChoice],
-    color: ColorChoice,
-    monochrome: ColorChoice,
-    style: SpriteWidth,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum Exit {
-    Room(Room),
-    ByGame(usize),
-}
-
-#[derive(Clone, Copy, Debug)]
-struct RoomDefinition {
-    walls: &'static [PlayfieldRow; 7],
-    color: ColorChoice,
-    monochrome: ColorChoice,
-    mirrored: bool,
-    foreground_priority: bool,
-    player_width: u8,
-    left_barrier: bool,
-    right_barrier: bool,
-    exits: [Exit; 4],
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Reaction {
-    from: RecordId,
-    to: RecordId,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ChosenReaction {
-    reaction: Reaction,
-    direction: Direction,
-}
-
 #[derive(Clone, Copy)]
-struct StartingWorld {
-    dot: Position,
-    rhindle: Dragon,
-    yorgle: Dragon,
-    grundle: Dragon,
-    magnet: Position,
-    sword: Position,
-    chalice: Position,
-    bridge: Position,
-    gold_key: Position,
-    white_key: Position,
-    black_key: Position,
-    gates: Gates,
-    bat: Bat,
-}
-
-#[derive(Clone, Copy)]
-struct RoomBounds {
-    record: RecordId,
-    first: Room,
-    last: Room,
+enum RoomEdge {
+    North,
+    East,
+    South,
+    West,
 }
 
 struct PreparedDisplay {
@@ -583,12 +539,6 @@ impl Default for PreparedDisplay {
             first_position: Position::default(),
             second_position: Position::default(),
         }
-    }
-}
-
-impl ObjectDescriptor {
-    fn position_matches(self, record: RecordId) -> bool {
-        matches!(self.position, PositionSource::Record(candidate) if candidate == record)
     }
 }
 
@@ -744,26 +694,68 @@ impl Adventure {
         Ok(true)
     }
 
-    // Only the copied world fields are reset; display caches and counters remain live.
+    // Place the selected game's actors and items; display caches and counters remain live.
     pub fn initialize_world(&mut self, host: &mut impl FrameHost) -> Result<bool, String> {
         self.world.player.room = Room::GameSelection;
         self.world.safe_player.room = Room::GameSelection;
         self.world.player.y = 0;
         self.world.safe_player.y = 0;
-        let world = STARTING_WORLDS[self.world.game.index()];
-        self.world.dot = world.dot;
-        self.world.rhindle = world.rhindle;
-        self.world.yorgle = world.yorgle;
-        self.world.grundle = world.grundle;
-        self.world.magnet = world.magnet;
-        self.world.sword = world.sword;
-        self.world.chalice = world.chalice;
-        self.world.bridge = world.bridge;
-        self.world.gold_key = world.gold_key;
-        self.world.white_key = world.white_key;
-        self.world.black_key = world.black_key;
-        self.world.gates = world.gates;
-        self.world.bat = world.bat;
+        let world = &mut self.world;
+        world.dot = Position::new(Room::BlackMazeDot, 81, 18);
+        world.gates = Gates {
+            gold: GateState::Closed,
+            white: GateState::Closed,
+            black: GateState::Closed,
+        };
+        world.bat = Bat::default();
+
+        // Games 2 and 3 share the same starting layout before Game 3 relocates its objects.
+        match world.game {
+            Game::One => {
+                world.rhindle.position = Position::new(Room::AboveWhiteCastle, 80, 32);
+                world.yorgle.position = Position::new(Room::WestHall, 80, 32);
+                world.grundle.position = Position::new(Room::RedHall, 80, 32);
+                world.magnet = Position::new(Room::BlackCastleInterior, 128, 32);
+                world.sword = Position::new(Room::GoldTreasury, 32, 32);
+                world.chalice = Position::new(Room::PurpleChamber, 48, 32);
+                world.bridge = Position::new(Room::BlueMazeNorth, 41, 55);
+                world.gold_key = Position::new(Room::GoldCastle, 32, 64);
+                world.white_key = Position::new(Room::AboveWhiteCastle, 32, 64);
+                world.black_key = Position::new(Room::RedHall, 32, 64);
+                world.bat.position = Position::new(Room::WhiteCastleInterior, 32, 32);
+            }
+            Game::Two | Game::Three => {
+                world.rhindle.position = Position::new(Room::BlackMaze14, 80, 32);
+                world.yorgle.position = Position::new(Room::RedMazeSouth, 80, 32);
+                world.grundle.position = Position::new(Room::BlueMazeNorth, 80, 32);
+                world.magnet = Position::new(Room::AboveWhiteCastle, 128, 32);
+                world.sword = Position::new(Room::GoldCastle, 32, 32);
+                world.chalice = Position::new(Room::BlackMaze14, 48, 32);
+                world.bridge = Position::new(Room::CatacombsSide, 64, 64);
+                world.gold_key = Position::new(Room::CatacombsCenter, 32, 64);
+                world.white_key = Position::new(Room::BlueMazeSouth, 32, 64);
+                world.black_key = Position::new(Room::RedMazeSouth, 32, 64);
+                world.bat.position = Position::new(Room::BelowGoldCastle, 32, 32);
+            }
+        }
+
+        // Opposing directions cancel in Game 1; later games begin with committed headings.
+        let first_game = world.game == Game::One;
+        for dragon in [&mut world.rhindle, &mut world.yorgle, &mut world.grundle] {
+            dragon.state = DragonState::Wandering;
+            dragon.direction = Direction {
+                right: first_game,
+                left: true,
+                up: true,
+                down: first_game,
+            };
+        }
+        world.bat.direction = Direction {
+            right: first_game,
+            left: true,
+            up: first_game,
+            down: true,
+        };
 
         if self.world.game == Game::Three {
             self.randomize_game_three();
@@ -784,17 +776,38 @@ impl Adventure {
         self.world.previous_select = self.controls.select;
     }
 
-    // Work backward through the eleven constraints, retaining the counter as seed.
+    // Placement order and rejection sampling retain the counter's seeded sequence.
     fn randomize_game_three(&mut self) {
-        for bounds in RANDOM_ROOM_BOUNDS.iter().rev() {
-            loop {
-                let old = self.world.idle_ticks;
-                self.world.idle_ticks = (old >> 5).wrapping_add(old).wrapping_add(1);
-                let candidate = self.world.idle_ticks & 31;
-                if candidate >= bounds.first as u8 && candidate <= bounds.last as u8 {
-                    self.world.position_mut(bounds.record).room = ROOM_IDS[usize::from(candidate)];
-                    break;
-                }
+        for record in [
+            RecordId::Magnet,
+            RecordId::Bat,
+            RecordId::BlackKey,
+            RecordId::WhiteKey,
+            RecordId::GoldKey,
+            RecordId::Bridge,
+            RecordId::Sword,
+            RecordId::Grundle,
+            RecordId::Yorgle,
+            RecordId::Rhindle,
+            RecordId::Chalice,
+        ] {
+            let (first, last) = match record {
+                RecordId::Chalice => (Room::BlackMaze13, Room::WhiteCastleInterior),
+                RecordId::BlackKey => (Room::WestHall, Room::GoldTreasury),
+                RecordId::WhiteKey => (Room::WestHall, Room::BlackMazeEntrance),
+                _ => (Room::WestHall, Room::RedHall),
+            };
+            self.world.position_mut(record).room = self.random_room(first, last);
+        }
+    }
+
+    fn random_room(&mut self, first: Room, last: Room) -> Room {
+        loop {
+            let old = self.world.idle_ticks;
+            self.world.idle_ticks = (old >> 5).wrapping_add(old).wrapping_add(1);
+            let candidate = self.world.idle_ticks & 31;
+            if candidate >= first as u8 && candidate <= last as u8 {
+                return ROOM_IDS[usize::from(candidate)];
             }
         }
     }
@@ -860,25 +873,24 @@ impl Adventure {
                 continue;
             }
             let position = self.world.position(record);
-            if position.room != CASTLE_INTERIORS[gate.index()]
-                || (position.y.wrapping_sub(13) as i8) >= 0
-            {
+            let (_, _, inside, outside) = gate.castle();
+            if position.room != inside || (position.y.wrapping_sub(13) as i8) >= 0 {
                 continue;
             }
-            *self.world.position_mut(record) = Position::new(CASTLE_OUTSIDES[gate.index()], 80, 44);
+            *self.world.position_mut(record) = Position::new(outside, 80, 44);
             self.world.gates.set(gate, GateState::Open);
             return;
         }
         let mut position = self.world.position(record);
         let exit = if (position.y.wrapping_sub(106) as i8) >= 0 {
             position.y = 13;
-            0
+            RoomEdge::North
         } else if position.x < 3 || position.x >= 240 {
             position.x = if record == RecordId::Player { 158 } else { 154 };
-            3
+            RoomEdge::West
         } else if position.y < 13 {
             position.y = 105;
-            2
+            RoomEdge::South
         } else if record == RecordId::Player {
             if position.x < 159 {
                 return;
@@ -890,16 +902,15 @@ impl Adventure {
                 return;
             }
             position.x = 3;
-            1
+            RoomEdge::East
         } else {
             if position.x < 155 {
                 return;
             }
             position.x = 3;
-            1
+            RoomEdge::East
         };
-        let destination = self.find_room_record(position.room).exits[exit];
-        position.room = self.resolve_game_exit(destination);
+        position.room = self.room_exit(position.room, exit);
         *self.world.position_mut(record) = position;
     }
 
@@ -916,11 +927,153 @@ impl Adventure {
             .wrapping_sub(if direction.down { steps } else { 0 });
     }
 
-    // Tagged exits select the current game's member of a three-room group.
-    fn resolve_game_exit(&self, exit: Exit) -> Room {
-        match exit {
-            Exit::Room(room) => room,
-            Exit::ByGame(group) => GAME_DEPENDENT_EXITS[group][self.world.game.index()],
+    // Connections describe the map directly; castle entrances are handled before ordinary edges.
+    fn room_exit(&self, room: Room, edge: RoomEdge) -> Room {
+        let first_game = self.world.game == Game::One;
+        match (room, edge) {
+            (Room::GameSelection | Room::GoldTreasury, _) => room,
+            (Room::WestHall, RoomEdge::North) => Room::BlueMazeEntrance,
+            (Room::WestHall, RoomEdge::East) => Room::BelowGoldCastle,
+            (Room::WestHall, RoomEdge::South) => {
+                if first_game {
+                    Room::BlackCastle
+                } else {
+                    Room::WhiteCastle
+                }
+            }
+            (Room::WestHall, RoomEdge::West) => Room::SecretPassage,
+            (Room::BelowGoldCastle, RoomEdge::North) => Room::GoldCastle,
+            (Room::BelowGoldCastle, RoomEdge::East) => Room::SecretPassage,
+            (Room::BelowGoldCastle, RoomEdge::South) => {
+                if first_game {
+                    Room::BlueMaze05
+                } else {
+                    Room::GoldCastle
+                }
+            }
+            (Room::BelowGoldCastle, RoomEdge::West) => Room::WestHall,
+            (Room::SecretPassage, RoomEdge::North) => Room::BlueMazeSouth,
+            (Room::SecretPassage, RoomEdge::East) => Room::WestHall,
+            (Room::SecretPassage, RoomEdge::South) => {
+                if first_game {
+                    Room::RedHall
+                } else {
+                    Room::CatacombsEntrance
+                }
+            }
+            (Room::SecretPassage, RoomEdge::West) => Room::BelowGoldCastle,
+
+            // The blue maze connects the three outdoor halls.
+            (Room::BlueMazeNorth, RoomEdge::North) => Room::BlackCastle,
+            (Room::BlueMazeNorth, RoomEdge::East) => Room::BlueMaze05,
+            (Room::BlueMazeNorth, RoomEdge::South) => Room::BlueMazeCenter,
+            (Room::BlueMazeNorth, RoomEdge::West) => Room::BlueMazeSouth,
+            (Room::BlueMaze05, RoomEdge::North) => Room::RedHall,
+            (Room::BlueMaze05, RoomEdge::East) => Room::BlueMazeSouth,
+            (Room::BlueMaze05, RoomEdge::South) => Room::BlueMazeEntrance,
+            (Room::BlueMaze05, RoomEdge::West) => Room::BlueMazeNorth,
+            (Room::BlueMazeSouth, RoomEdge::North) => Room::BlueMazeCenter,
+            (Room::BlueMazeSouth, RoomEdge::East) => Room::BlueMazeNorth,
+            (Room::BlueMazeSouth, RoomEdge::South) => Room::SecretPassage,
+            (Room::BlueMazeSouth, RoomEdge::West) => Room::BlueMaze05,
+            (Room::BlueMazeCenter, RoomEdge::North) => Room::BlueMazeNorth,
+            (Room::BlueMazeCenter, RoomEdge::East | RoomEdge::West) => Room::BlueMazeEntrance,
+            (Room::BlueMazeCenter, RoomEdge::South) => Room::BlueMazeSouth,
+            (Room::BlueMazeEntrance, RoomEdge::North) => Room::BlueMaze05,
+            (Room::BlueMazeEntrance, RoomEdge::East | RoomEdge::West) => Room::BlueMazeCenter,
+            (Room::BlueMazeEntrance, RoomEdge::South) => Room::WestHall,
+
+            // The catacombs open onto the side passages and the purple chamber.
+            (Room::CatacombsCenter, RoomEdge::North | RoomEdge::East | RoomEdge::West) => {
+                Room::CatacombsEntrance
+            }
+            (Room::CatacombsCenter, RoomEdge::South) => Room::CatacombsSide,
+            (Room::CatacombsEntrance, RoomEdge::North) => Room::SecretPassage,
+            (Room::CatacombsEntrance, RoomEdge::East | RoomEdge::South | RoomEdge::West) => {
+                Room::CatacombsCenter
+            }
+            (Room::CatacombsSide, RoomEdge::North) => Room::CatacombsCenter,
+            (Room::CatacombsSide, RoomEdge::East) => Room::SidePassage0c,
+            (Room::CatacombsSide, RoomEdge::South) => Room::PurpleChamber,
+            (Room::CatacombsSide, RoomEdge::West) => Room::SidePassage0d,
+            (Room::SidePassage0c, RoomEdge::North) => Room::PurpleChamber,
+            (Room::SidePassage0c, RoomEdge::East) => Room::SidePassage0d,
+            (Room::SidePassage0c, RoomEdge::South) => Room::RedHall,
+            (Room::SidePassage0c, RoomEdge::West) => Room::CatacombsSide,
+            (Room::SidePassage0d, RoomEdge::North) => Room::WhiteCastle,
+            (Room::SidePassage0d, RoomEdge::East) => Room::CatacombsSide,
+            (Room::SidePassage0d, RoomEdge::South) => Room::AboveWhiteCastle,
+            (Room::SidePassage0d, RoomEdge::West) => Room::SidePassage0c,
+
+            // Exterior castle rooms use ordinary map edges outside the gate opening.
+            (Room::AboveWhiteCastle, RoomEdge::North) => Room::SidePassage0d,
+            (Room::AboveWhiteCastle, RoomEdge::East | RoomEdge::West) => Room::BlackCastle,
+            (Room::AboveWhiteCastle, RoomEdge::South) => Room::WhiteCastle,
+            (Room::WhiteCastle, RoomEdge::North) => Room::AboveWhiteCastle,
+            (Room::WhiteCastle, RoomEdge::East | RoomEdge::West) => Room::WhiteCastle,
+            (Room::WhiteCastle, RoomEdge::South) => Room::SidePassage0d,
+            (Room::BlackCastle, RoomEdge::North) => Room::WestHall,
+            (Room::BlackCastle, RoomEdge::East | RoomEdge::West) => Room::PurpleChamber,
+            (Room::BlackCastle, RoomEdge::South) => Room::BlueMazeNorth,
+            (Room::GoldCastle, RoomEdge::North) => Room::BlueMazeSouth,
+            (Room::GoldCastle, RoomEdge::East) => Room::SecretPassage,
+            (Room::GoldCastle, RoomEdge::South) => Room::BelowGoldCastle,
+            (Room::GoldCastle, RoomEdge::West) => Room::WestHall,
+
+            // Black Castle contains the dark maze; White Castle contains the red maze.
+            (Room::BlackMaze13, RoomEdge::North | RoomEdge::South) => Room::BlackMazeDot,
+            (Room::BlackMaze13, RoomEdge::East) => Room::BlackMaze14,
+            (Room::BlackMaze13, RoomEdge::West) => Room::BlackMazeEntrance,
+            (Room::BlackMaze14, RoomEdge::North | RoomEdge::South) => Room::BlackMazeEntrance,
+            (Room::BlackMaze14, RoomEdge::East) => Room::BlackMazeDot,
+            (Room::BlackMaze14, RoomEdge::West) => Room::BlackMaze13,
+            (Room::BlackMazeDot, RoomEdge::North | RoomEdge::South) => Room::BlackMaze13,
+            (Room::BlackMazeDot, RoomEdge::East) => Room::BlackMazeEntrance,
+            (Room::BlackMazeDot, RoomEdge::West) => Room::BlackMaze14,
+            (Room::BlackMazeEntrance, RoomEdge::North) => Room::BlackMaze14,
+            (Room::BlackMazeEntrance, RoomEdge::East) => Room::BlackMaze13,
+            (Room::BlackMazeEntrance, RoomEdge::South) => Room::BlackCastleInterior,
+            (Room::BlackMazeEntrance, RoomEdge::West) => Room::BlackMazeDot,
+            (Room::RedMaze17, RoomEdge::North | RoomEdge::South) => Room::RedMazeSouth,
+            (Room::RedMaze17, RoomEdge::East | RoomEdge::West) => Room::RedMazeNorth,
+            (Room::RedMazeNorth, RoomEdge::North | RoomEdge::South) => Room::WhiteCastleInterior,
+            (Room::RedMazeNorth, RoomEdge::East | RoomEdge::West) => Room::RedMaze17,
+            (Room::RedMazeSouth, RoomEdge::North | RoomEdge::South) => Room::RedMaze17,
+            (Room::RedMazeSouth, RoomEdge::East | RoomEdge::West) => Room::WhiteCastleInterior,
+            (Room::WhiteCastleInterior, RoomEdge::North | RoomEdge::South) => Room::RedMazeNorth,
+            (Room::WhiteCastleInterior, RoomEdge::East | RoomEdge::West) => Room::RedMazeSouth,
+            (Room::BlackCastleInterior, _) => {
+                if first_game {
+                    Room::PurpleChamber
+                } else {
+                    Room::BlackMazeEntrance
+                }
+            }
+
+            // The remaining chambers include the dot's separate, conditional credits entrance.
+            (Room::PurpleChamber, RoomEdge::North) => Room::RedHall,
+            (Room::PurpleChamber, RoomEdge::East) => Room::BlueMazeCenter,
+            (Room::PurpleChamber, RoomEdge::South) => {
+                if first_game {
+                    Room::BlackCastleInterior
+                } else {
+                    Room::SidePassage0c
+                }
+            }
+            (Room::PurpleChamber, RoomEdge::West) => Room::BlueMazeEntrance,
+            (Room::RedHall, RoomEdge::North) => {
+                if first_game {
+                    Room::SecretPassage
+                } else {
+                    Room::SidePassage0c
+                }
+            }
+            (Room::RedHall, RoomEdge::East) => Room::WestHall,
+            (Room::RedHall, RoomEdge::South) => Room::BlackCastle,
+            (Room::RedHall, RoomEdge::West) => Room::SecretPassage,
+            (Room::RobinettCredits, RoomEdge::North | RoomEdge::South) => Room::BlueMazeSouth,
+            (Room::RobinettCredits, RoomEdge::East) => Room::WestHall,
+            (Room::RobinettCredits, RoomEdge::West) => Room::SecretPassage,
         }
     }
 }
@@ -959,7 +1112,7 @@ impl Adventure {
         {
             return;
         }
-        let PositionSource::Record(record) = OBJECT_CATALOG[touched as usize].position else {
+        let Some(record) = touched.record() else {
             return;
         };
         if touched != self.world.held {
@@ -978,8 +1131,7 @@ impl Adventure {
         if self.world.held == ObjectId::Empty {
             return;
         }
-        let PositionSource::Record(record) = OBJECT_CATALOG[self.world.held as usize].position
-        else {
+        let Some(record) = self.world.held.record() else {
             return;
         };
         *self.world.position_mut(record) = Position::new(
@@ -1018,28 +1170,25 @@ impl Adventure {
     // Gates process black, white, then gold; entry precedes each gate's animation.
     fn update_castle_gates(&mut self) {
         for gate in [GateId::Black, GateId::White, GateId::Gold] {
-            let index = gate.index();
-            let touched = self.find_touching_object(GATE_OBJECTS[index]);
-            if touched == GATE_KEYS[index] {
+            let (object, key, inside, _) = gate.castle();
+            let touched = self.find_touching_object(object);
+            if touched == key {
                 self.world.gates.set(
                     gate,
                     GateState::from_value(self.world.gates.get(gate).value().wrapping_add(1)),
                 );
             }
             if self.world.gates.get(gate) != GateState::Closed {
-                let record = if self.is_touching_player(GATE_OBJECTS[index]) {
+                let record = if self.is_touching_player(object) {
                     self.world.gates.set(gate, GateState::Open);
                     Some(RecordId::Player)
                 } else if touched != ObjectId::Empty {
-                    match OBJECT_CATALOG[touched as usize].position {
-                        PositionSource::Record(record) => Some(record),
-                        PositionSource::Fixed(_) => None,
-                    }
+                    touched.record()
                 } else {
                     None
                 };
                 if let Some(record) = record {
-                    self.world.position_mut(record).room = CASTLE_INTERIORS[index];
+                    self.world.position_mut(record).room = inside;
                     self.world.position_mut(record).y = 16;
                 }
             }
@@ -1060,18 +1209,26 @@ impl Adventure {
     // The selected item moves toward the magnet's temporarily adjusted target.
     fn update_magnet(&mut self) {
         self.world.magnet.y = self.world.magnet.y.wrapping_sub(8);
-        if let Some(chosen) = self.choose_reaction(&MAGNET_REACTIONS, None) {
-            self.move_object_through_world(chosen.reaction.from, chosen.direction, 1);
+        // The first metal object in the room wins, even if it is already at the target.
+        for item in [
+            RecordId::GoldKey,
+            RecordId::WhiteKey,
+            RecordId::BlackKey,
+            RecordId::Sword,
+            RecordId::Bridge,
+            RecordId::Chalice,
+        ] {
+            if let Some(direction) = self.direction_toward(item, RecordId::Magnet) {
+                self.move_object_through_world(item, direction, 1);
+                break;
+            }
         }
         self.world.magnet.y = self.world.magnet.y.wrapping_add(8);
     }
 
     // Dark rooms center the light on the player and clamp its horizontal reach.
     fn update_dark_room_light(&mut self) {
-        if !matches!(
-            self.find_room_record(self.world.player.room).color,
-            ColorChoice::Fixed(8)
-        ) {
+        if !self.world.player.room.is_dark() {
             self.world.light.y = 0;
             return;
         }
@@ -1089,95 +1246,88 @@ impl Adventure {
 // Dragon and bat behavior.
 
 impl Adventure {
-    // No eligible reaction retains motion; an eligible but aligned pair stops motion.
-    fn move_creature(
-        &mut self,
-        creature: Creature,
-        list: &[Reaction],
-        ignored: Option<RecordId>,
-        speed: u8,
-    ) -> Option<ChosenReaction> {
-        let chosen = self.choose_reaction(list, ignored);
-        let previous = match creature {
-            Creature::Dragon(dragon) => self.world.dragon(dragon).direction,
-            Creature::Bat => self.world.bat.direction,
-        };
-        let direction = chosen.map_or(previous, |chosen| chosen.direction);
-        match creature {
-            Creature::Dragon(dragon) => self.world.dragon_mut(dragon).direction = direction,
-            Creature::Bat => self.world.bat.direction = direction,
-        }
-        self.move_object_through_world(creature.record(), direction, speed);
-        chosen
-    }
-
-    // Ordered pairs use separate local identities and return the chosen pair to the bat.
-    fn choose_reaction(
-        &self,
-        list: &[Reaction],
-        ignored: Option<RecordId>,
-    ) -> Option<ChosenReaction> {
-        for reaction in list {
-            if self.world.position(reaction.from).room != self.world.position(reaction.to).room {
-                continue;
-            }
-            if ignored == Some(reaction.from) || ignored == Some(reaction.to) {
-                continue;
-            }
-            return Some(ChosenReaction {
-                reaction: *reaction,
-                direction: self.direction_between_objects(reaction.from, reaction.to),
-            });
-        }
-        None
-    }
-
-    // Each reaction points from its first record toward its second record.
-    fn direction_between_objects(&self, from: RecordId, to: RecordId) -> Direction {
+    // An absent target retains motion; a target at the same position supplies idle motion.
+    fn direction_toward(&self, from: RecordId, to: RecordId) -> Option<Direction> {
         let from = self.world.position(from);
         let to = self.world.position(to);
         if from.room != to.room {
-            return Direction::default();
+            return None;
         }
-        Direction {
+        Some(Direction {
             right: to.x > from.x,
             left: to.x < from.x,
             up: to.y > from.y,
             down: to.y < from.y,
+        })
+    }
+
+    // Dragons flee their fears before pursuing the player or their guarded treasures.
+    fn dragon_direction(&self, dragon: DragonId) -> Direction {
+        let record = dragon.record();
+        if self.controls.right_difficulty == Difficulty::A
+            && let Some(direction) = self.direction_toward(RecordId::Sword, record)
+        {
+            return direction;
         }
+        if dragon == DragonId::Yorgle
+            && let Some(direction) = self.direction_toward(RecordId::GoldKey, record)
+        {
+            return direction;
+        }
+
+        // Pursuit priority varies by dragon. An aligned first target still takes precedence.
+        let targets: &[RecordId] = match dragon {
+            DragonId::Rhindle => &[RecordId::Player, RecordId::Chalice, RecordId::WhiteKey],
+            DragonId::Yorgle => &[RecordId::Player, RecordId::Chalice],
+            DragonId::Grundle => &[
+                RecordId::Player,
+                RecordId::Chalice,
+                RecordId::Bridge,
+                RecordId::Magnet,
+                RecordId::BlackKey,
+            ],
+        };
+        targets
+            .iter()
+            .find_map(|&target| self.direction_toward(record, target))
+            .unwrap_or(self.world.dragon(dragon).direction)
     }
 
     // Rhindle moves three steps using his own priorities.
     fn update_rhindle(&mut self) {
-        self.update_dragon(DragonId::Rhindle, &RHINDLE_REACTIONS, 3);
+        self.update_dragon(DragonId::Rhindle);
     }
 
     // Yorgle moves two steps and includes the Gold Key among his fears.
     fn update_yorgle(&mut self) {
-        self.update_dragon(DragonId::Yorgle, &YORGLE_REACTIONS, 2);
+        self.update_dragon(DragonId::Yorgle);
     }
 
     // Grundle moves two steps using his guarding priorities.
     fn update_grundle(&mut self) {
-        self.update_dragon(DragonId::Grundle, &GRUNDLE_REACTIONS, 2);
+        self.update_dragon(DragonId::Grundle);
     }
 
     // Preserve wandering, sword contact, swallowing, and delayed-bite branch order.
-    fn update_dragon(&mut self, dragon: DragonId, reactions: &[Reaction], speed: u8) {
+    fn update_dragon(&mut self, dragon: DragonId) {
         let object = dragon.object();
         match self.world.dragon(dragon).state {
             DragonState::Wandering => {
-                let ignored = if self.controls.right_difficulty == Difficulty::B {
-                    Some(RecordId::Sword)
-                } else {
-                    None
+                let speed = match dragon {
+                    DragonId::Rhindle => 3,
+                    DragonId::Yorgle | DragonId::Grundle => 2,
                 };
-                self.move_creature(Creature::Dragon(dragon), reactions, ignored, speed);
+                let direction = self.dragon_direction(dragon);
+                self.world.dragon_mut(dragon).direction = direction;
+                self.move_object_through_world(dragon.record(), direction, speed);
                 if self.is_touching_player(object) {
-                    let difficulty = usize::from(self.controls.left_difficulty == Difficulty::A);
-                    self.world.dragon_mut(dragon).state = DragonState::Biting(
-                        DRAGON_BITE_DELAYS[self.world.game.index()][difficulty],
-                    );
+                    let delay = match (self.world.game, self.controls.left_difficulty) {
+                        (Game::One, Difficulty::B) => 0xd0,
+                        (Game::One, Difficulty::A) => 0xe8,
+                        (Game::Two | Game::Three, Difficulty::B) => 0xf0,
+                        (Game::Two | Game::Three, Difficulty::A) => 0xf6,
+                    };
+                    self.world.dragon_mut(dragon).state = DragonState::Biting(delay);
                     self.world.dragon_mut(dragon).position.x = self.world.safe_player.x;
                     self.world.dragon_mut(dragon).position.y = self.world.safe_player.y;
                     self.world.sound_effect = SoundEffect::Roar;
@@ -1225,16 +1375,39 @@ impl Adventure {
             self.world.bat.flight_timer = self.world.bat.flight_timer.wrapping_add(1);
             self.move_object_through_world(RecordId::Bat, self.world.bat.direction, 3);
         } else {
-            let chosen =
-                self.move_creature(Creature::Bat, &BAT_REACTIONS, self.world.bat.carried, 3);
-            if let Some(chosen) = chosen {
-                let target = self.world.position(chosen.reaction.to);
+            // Cargo is excluded from the bat's ordered targets until its commitment ends.
+            let target = [
+                RecordId::Chalice,
+                RecordId::Sword,
+                RecordId::Bridge,
+                RecordId::GoldKey,
+                RecordId::WhiteKey,
+                RecordId::BlackKey,
+                RecordId::Rhindle,
+                RecordId::Yorgle,
+                RecordId::Grundle,
+                RecordId::Magnet,
+            ]
+            .into_iter()
+            .find(|&target| {
+                self.world.bat.carried != Some(RecordId::Bat)
+                    && self.world.bat.carried != Some(target)
+                    && self.world.position(target).room == self.world.bat.position.room
+            });
+            if let Some(target) = target {
+                self.world.bat.direction = self
+                    .direction_toward(RecordId::Bat, target)
+                    .expect("the bat target is in its room");
+            }
+            self.move_object_through_world(RecordId::Bat, self.world.bat.direction, 3);
+            if let Some(record) = target {
+                let target = self.world.position(record);
                 let bat = self.world.bat.position;
                 if target.room == bat.room
                     && target.x.wrapping_sub(bat.x).wrapping_add(4) & 0xf8 == 0
                     && target.y.wrapping_sub(bat.y).wrapping_add(4) & 0xf8 == 0
                 {
-                    self.world.bat.carried = Some(chosen.reaction.to);
+                    self.world.bat.carried = Some(record);
                     self.world.bat.flight_timer = 16;
                 }
             }
@@ -1242,7 +1415,7 @@ impl Adventure {
         if let Some(cargo) = self.world.bat.carried {
             let bat = self.world.bat.position;
             *self.world.position_mut(cargo) = Position::new(bat.room, bat.x.wrapping_add(8), bat.y);
-            if OBJECT_CATALOG[self.world.held as usize].position_matches(cargo) {
+            if self.world.held.record() == Some(cargo) {
                 self.world.held = ObjectId::Empty;
             }
         }
@@ -1331,20 +1504,9 @@ impl Adventure {
 
     // Appearance and images are a snapshot, reused by the following two pictures.
     fn prepare_room_display(&mut self) {
-        let room = self.find_room_record(self.world.player.room);
-        self.display.room_walls = room.walls;
-        self.display.appearance = Appearance {
-            foreground: self.resolve_display_color(if self.controls.color {
-                room.color
-            } else {
-                room.monochrome
-            }),
-            background: self.resolve_display_color(ColorChoice::Fixed(8)),
-            mirrored: room.mirrored,
-            walls_in_front: room.foreground_priority,
-            player_width: room.player_width,
-            barriers: [room.left_barrier, room.right_barrier],
-        };
+        let (walls, appearance) = self.room_appearance(self.world.player.room);
+        self.display.room_walls = walls;
+        self.display.appearance = appearance;
         self.select_visible_objects();
         if self.world.first_visible == ObjectId::Light
             || self.world.first_visible == ObjectId::Bridge
@@ -1356,43 +1518,25 @@ impl Adventure {
             );
         }
 
-        // Both slots use the same catalog resolution; priority follows their selected order.
+        // Resolve the live object's appearance once; following pictures reuse this snapshot.
         for (slot, object) in [self.world.first_visible, self.world.second_visible]
             .into_iter()
             .enumerate()
         {
-            let descriptor = OBJECT_CATALOG[object as usize];
-            let position = self.find_object_position(object);
-            let image =
-                self.select_object_image(descriptor.images, self.image_state(descriptor.state));
+            let display = self.object_display(object);
             self.display.objects[slot] = ObjectLine {
-                x: object_screen_x(position.x, descriptor.style),
-                color: self.resolve_display_color(if self.controls.color {
-                    descriptor.color
-                } else {
-                    descriptor.monochrome
-                }),
-                width: descriptor.style,
+                x: object_screen_x(display.position.x, display.width),
+                color: display.color,
+                width: display.width,
                 bits: 0,
             };
             if slot == 0 {
-                self.display.first_position = position;
-                self.display.first_image = image;
+                self.display.first_position = display.position;
+                self.display.first_image = display.bitmap;
             } else {
-                self.display.second_position = position;
-                self.display.second_image = image;
+                self.display.second_position = display.position;
+                self.display.second_image = display.bitmap;
             }
-        }
-    }
-
-    // State pointers become a closed selection of named game fields and fixed values.
-    fn image_state(&self, source: StateSource) -> u8 {
-        match source {
-            StateSource::Fixed(value) => value,
-            StateSource::Dragon(dragon) => self.world.dragon(dragon).state.value(),
-            StateSource::Gate(gate) => self.world.gates.get(gate).value(),
-            StateSource::GameNumber => (self.world.game.index() * 2) as u8,
-            StateSource::BatAnimation => self.world.bat.animation,
         }
     }
 
@@ -1418,18 +1562,77 @@ impl Adventure {
         self.world.last_candidate = candidate;
     }
 
-    // Room identities index the immutable map catalog.
-    fn find_room_record(&self, room: Room) -> &'static RoomDefinition {
-        &ROOMS[room as usize]
-    }
+    // Wall artwork varies by room; darkness controls both the light and foreground priority.
+    fn room_appearance(&self, room: Room) -> (&'static [PlayfieldRow; 7], Appearance) {
+        let walls = match room {
+            Room::GameSelection | Room::GoldTreasury | Room::PurpleChamber => &WALLS_ENCLOSED_ROOM,
+            Room::WestHall | Room::BelowGoldCastle | Room::RobinettCredits => &WALLS_OPEN_HALL,
+            Room::SecretPassage => &WALLS_SECRET_PASSAGE,
+            Room::BlueMazeNorth => &WALLS_BLUE_MAZE_NORTH,
+            Room::BlueMaze05 => &WALLS_BLUE_MAZE_05,
+            Room::BlueMazeSouth => &WALLS_BLUE_MAZE_SOUTH,
+            Room::BlueMazeCenter => &WALLS_BLUE_MAZE_CENTER,
+            Room::BlueMazeEntrance => &WALLS_BLUE_MAZE_ENTRANCE,
+            Room::CatacombsCenter => &WALLS_CATACOMBS_CENTER,
+            Room::CatacombsEntrance => &WALLS_CATACOMBS_ENTRANCE,
+            Room::CatacombsSide => &WALLS_CATACOMBS_SIDE,
+            Room::SidePassage0c | Room::SidePassage0d => &WALLS_SIDE_PASSAGE,
+            Room::AboveWhiteCastle | Room::RedHall => &WALLS_TOP_OPENING,
+            Room::WhiteCastle | Room::BlackCastle | Room::GoldCastle => &WALLS_CASTLE,
+            Room::BlackMaze13 => &WALLS_BLACK_MAZE_13,
+            Room::BlackMaze14 => &WALLS_BLACK_MAZE_14,
+            Room::BlackMazeDot => &WALLS_BLACK_MAZE_DOT,
+            Room::BlackMazeEntrance => &WALLS_BLACK_MAZE_ENTRANCE,
+            Room::RedMaze17 => &WALLS_RED_MAZE_17,
+            Room::RedMazeNorth => &WALLS_RED_MAZE_NORTH,
+            Room::RedMazeSouth => &WALLS_RED_MAZE_SOUTH,
+            Room::WhiteCastleInterior => &WALLS_WHITE_CASTLE_INTERIOR,
+            Room::BlackCastleInterior => &WALLS_BLACK_CASTLE_INTERIOR,
+        };
 
-    // The first inclusive ceiling selects the object's current bitmap.
-    fn select_object_image(&self, choices: &'static [ImageChoice], state: u8) -> Bitmap {
-        choices
-            .iter()
-            .find(|choice| state <= choice.ceiling)
-            .expect("image ranges end at 255")
-            .bitmap
+        // Dark rooms share a palette; outdoor rooms and colored mazes retain their own hues.
+        let color = if room.is_dark() {
+            0x08
+        } else if !self.controls.color {
+            match room {
+                Room::WhiteCastle => 0x0c,
+                Room::BlackCastle => 0x02,
+                _ => 0x0a,
+            }
+        } else {
+            match room {
+                Room::GameSelection | Room::PurpleChamber | Room::RobinettCredits => 0x66,
+                Room::WestHall => 0xd8,
+                Room::BelowGoldCastle => 0xc8,
+                Room::SecretPassage => 0xe8,
+                Room::BlueMazeNorth
+                | Room::BlueMaze05
+                | Room::BlueMazeSouth
+                | Room::BlueMazeCenter
+                | Room::BlueMazeEntrance => 0x86,
+                Room::SidePassage0c => 0x98,
+                Room::SidePassage0d => 0xb8,
+                Room::AboveWhiteCastle => 0xa8,
+                Room::WhiteCastle => 0x0c,
+                Room::BlackCastle => 0x00,
+                Room::GoldCastle | Room::GoldTreasury => 0x1a,
+                _ => 0x36,
+            }
+        };
+        (
+            walls,
+            Appearance {
+                foreground: self.resolve_display_color(ColorChoice::Fixed(color)),
+                background: self.resolve_display_color(ColorChoice::Fixed(8)),
+                mirrored: !matches!(room, Room::BlackMaze14 | Room::BlackMazeDot),
+                walls_in_front: room.is_dark(),
+                player_width: 4,
+                barriers: [
+                    matches!(room, Room::WestHall | Room::SidePassage0d),
+                    matches!(room, Room::SecretPassage | Room::SidePassage0c),
+                ],
+            },
+        )
     }
 
     // Resolve literal or counter-driven colors, then apply the idle transform.
@@ -1444,12 +1647,102 @@ impl Adventure {
         value.wrapping_shl(1)
     }
 
-    // Position sources distinguish live records from immutable scenery.
+    // Live objects use their world positions; scenery stays in its room.
     fn find_object_position(&self, object: ObjectId) -> Position {
-        match OBJECT_CATALOG[object as usize].position {
-            PositionSource::Record(record) => self.world.position(record),
-            PositionSource::Fixed(position) => position,
+        if let Some(record) = object.record() {
+            return self.world.position(record);
         }
+        match object {
+            ObjectId::GoldGate => Position::new(Room::GoldCastle, 77, 49),
+            ObjectId::WhiteGate => Position::new(Room::WhiteCastle, 77, 49),
+            ObjectId::BlackGate => Position::new(Room::BlackCastle, 77, 49),
+            ObjectId::Credits => Position::new(Room::RobinettCredits, 80, 105),
+            ObjectId::GameNumber => Position::new(Room::GameSelection, 80, 64),
+            _ => unreachable!("live objects have records"),
+        }
+    }
+
+    // Artwork follows named live states; static objects need no state lookup.
+    fn object_display(&self, object: ObjectId) -> ObjectDisplay {
+        let rows: &'static [u8] = match object {
+            ObjectId::Light => &LIGHT_IMAGE,
+            ObjectId::GoldGate => self.gate_image(GateId::Gold),
+            ObjectId::WhiteGate => self.gate_image(GateId::White),
+            ObjectId::BlackGate => self.gate_image(GateId::Black),
+            ObjectId::Credits => &ROBINETT_CREDITS_IMAGE,
+            ObjectId::GameNumber => match self.world.game {
+                Game::One => &GAME_ONE_IMAGE,
+                Game::Two => &GAME_TWO_IMAGE,
+                Game::Three => &GAME_THREE_IMAGE,
+            },
+            ObjectId::Rhindle => dragon_image(self.world.rhindle.state),
+            ObjectId::Yorgle => dragon_image(self.world.yorgle.state),
+            ObjectId::Grundle => dragon_image(self.world.grundle.state),
+            ObjectId::Sword => &SWORD_IMAGE,
+            ObjectId::Bridge => &BRIDGE_IMAGE,
+            ObjectId::GoldKey | ObjectId::WhiteKey | ObjectId::BlackKey => &KEY_IMAGE,
+            ObjectId::Bat if self.world.bat.animation < 4 => &BAT_FRAME_ONE,
+            ObjectId::Bat => &BAT_FRAME_TWO,
+            ObjectId::Dot => &DOT_IMAGE,
+            ObjectId::Chalice => &CHALICE_IMAGE,
+            ObjectId::Magnet => &MAGNET_IMAGE,
+            ObjectId::Empty => &EMPTY_IMAGE,
+        };
+
+        // Only the light and bridge are enlarged. Cycling objects share the idle palette rule.
+        let width = if matches!(object, ObjectId::Light | ObjectId::Bridge) {
+            SpriteWidth::Wide
+        } else {
+            SpriteWidth::Normal
+        };
+        let color = if self.controls.color {
+            match object {
+                ObjectId::Light => ColorChoice::Fixed(0x28),
+                ObjectId::Credits | ObjectId::Chalice => ColorChoice::Cycling,
+                ObjectId::GameNumber | ObjectId::Grundle => ColorChoice::Fixed(0xc8),
+                ObjectId::Rhindle => ColorChoice::Fixed(0x36),
+                ObjectId::Yorgle | ObjectId::Sword | ObjectId::GoldKey => ColorChoice::Fixed(0x1a),
+                ObjectId::Bridge => ColorChoice::Fixed(0x66),
+                ObjectId::WhiteKey => ColorChoice::Fixed(0x0e),
+                ObjectId::Dot => ColorChoice::Fixed(0x08),
+                _ => ColorChoice::Fixed(0),
+            }
+        } else {
+            ColorChoice::Fixed(match object {
+                ObjectId::Light => 0x0c,
+                ObjectId::Rhindle | ObjectId::WhiteKey => 0x0e,
+                ObjectId::Yorgle
+                | ObjectId::Sword
+                | ObjectId::GoldKey
+                | ObjectId::Chalice
+                | ObjectId::Magnet => 0x06,
+                ObjectId::Bridge => 0x02,
+                ObjectId::Dot => 0x08,
+                _ => 0,
+            })
+        };
+        ObjectDisplay {
+            position: self.find_object_position(object),
+            bitmap: Bitmap::new(rows),
+            color: self.resolve_display_color(color),
+            width,
+        }
+    }
+
+    // Gates grow to full height, then retract, changing two bitmap rows every four ticks.
+    fn gate_image(&self, gate: GateId) -> &'static [u8] {
+        let value = self.world.gates.get(gate).value();
+        let stage = usize::from(value.saturating_sub(1) / 4).min(12);
+        let start = stage.abs_diff(6) * 2;
+        &GATE_IMAGE[start..]
+    }
+}
+
+fn dragon_image(state: DragonState) -> &'static [u8] {
+    match state {
+        DragonState::Wandering | DragonState::Swallowed => &DRAGON_WALKING_IMAGE,
+        DragonState::Dead => &DRAGON_DEAD_IMAGE,
+        DragonState::Biting(_) => &DRAGON_BITING_IMAGE,
     }
 }
 
@@ -1477,336 +1770,7 @@ fn screen_x(x: i16) -> u8 {
     x.rem_euclid(WIDTH as i16) as u8
 }
 
-// Starting worlds and randomization constraints.
-
-static RANDOM_ROOM_BOUNDS: [RoomBounds; 11] = [
-    RoomBounds {
-        record: RecordId::Chalice,
-        first: Room::BlackMaze13,
-        last: Room::WhiteCastleInterior,
-    },
-    RoomBounds {
-        record: RecordId::Rhindle,
-        first: Room::WestHall,
-        last: Room::RedHall,
-    },
-    RoomBounds {
-        record: RecordId::Yorgle,
-        first: Room::WestHall,
-        last: Room::RedHall,
-    },
-    RoomBounds {
-        record: RecordId::Grundle,
-        first: Room::WestHall,
-        last: Room::RedHall,
-    },
-    RoomBounds {
-        record: RecordId::Sword,
-        first: Room::WestHall,
-        last: Room::RedHall,
-    },
-    RoomBounds {
-        record: RecordId::Bridge,
-        first: Room::WestHall,
-        last: Room::RedHall,
-    },
-    RoomBounds {
-        record: RecordId::GoldKey,
-        first: Room::WestHall,
-        last: Room::RedHall,
-    },
-    RoomBounds {
-        record: RecordId::WhiteKey,
-        first: Room::WestHall,
-        last: Room::BlackMazeEntrance,
-    },
-    RoomBounds {
-        record: RecordId::BlackKey,
-        first: Room::WestHall,
-        last: Room::GoldTreasury,
-    },
-    RoomBounds {
-        record: RecordId::Bat,
-        first: Room::WestHall,
-        last: Room::RedHall,
-    },
-    RoomBounds {
-        record: RecordId::Magnet,
-        first: Room::WestHall,
-        last: Room::RedHall,
-    },
-];
-
-const STARTING_WORLDS: [StartingWorld; 3] = [GAME_ONE_WORLD, GAME_TWO_WORLD, GAME_TWO_WORLD];
-
-const GAME_ONE_WORLD: StartingWorld = StartingWorld {
-    dot: Position::new(Room::BlackMazeDot, 81, 18),
-    rhindle: Dragon {
-        position: Position::new(Room::AboveWhiteCastle, 80, 32),
-        direction: Direction {
-            right: true,
-            left: true,
-            up: true,
-            down: true,
-        },
-        state: DragonState::Wandering,
-    },
-    yorgle: Dragon {
-        position: Position::new(Room::WestHall, 80, 32),
-        direction: Direction {
-            right: true,
-            left: true,
-            up: true,
-            down: true,
-        },
-        state: DragonState::Wandering,
-    },
-    grundle: Dragon {
-        position: Position::new(Room::RedHall, 80, 32),
-        direction: Direction {
-            right: true,
-            left: true,
-            up: true,
-            down: true,
-        },
-        state: DragonState::Wandering,
-    },
-    magnet: Position::new(Room::BlackCastleInterior, 128, 32),
-    sword: Position::new(Room::GoldTreasury, 32, 32),
-    chalice: Position::new(Room::PurpleChamber, 48, 32),
-    bridge: Position::new(Room::BlueMazeNorth, 41, 55),
-    gold_key: Position::new(Room::GoldCastle, 32, 64),
-    white_key: Position::new(Room::AboveWhiteCastle, 32, 64),
-    black_key: Position::new(Room::RedHall, 32, 64),
-    gates: Gates {
-        gold: GateState::Closed,
-        white: GateState::Closed,
-        black: GateState::Closed,
-    },
-    bat: Bat {
-        position: Position::new(Room::WhiteCastleInterior, 32, 32),
-        direction: Direction {
-            right: true,
-            left: true,
-            up: true,
-            down: true,
-        },
-        animation: 0,
-        carried: None,
-        flight_timer: 0,
-    },
-};
-
-const GAME_TWO_WORLD: StartingWorld = StartingWorld {
-    dot: Position::new(Room::BlackMazeDot, 81, 18),
-    rhindle: Dragon {
-        position: Position::new(Room::BlackMaze14, 80, 32),
-        direction: Direction {
-            right: false,
-            left: true,
-            up: true,
-            down: false,
-        },
-        state: DragonState::Wandering,
-    },
-    yorgle: Dragon {
-        position: Position::new(Room::RedMazeSouth, 80, 32),
-        direction: Direction {
-            right: false,
-            left: true,
-            up: true,
-            down: false,
-        },
-        state: DragonState::Wandering,
-    },
-    grundle: Dragon {
-        position: Position::new(Room::BlueMazeNorth, 80, 32),
-        direction: Direction {
-            right: false,
-            left: true,
-            up: true,
-            down: false,
-        },
-        state: DragonState::Wandering,
-    },
-    magnet: Position::new(Room::AboveWhiteCastle, 128, 32),
-    sword: Position::new(Room::GoldCastle, 32, 32),
-    chalice: Position::new(Room::BlackMaze14, 48, 32),
-    bridge: Position::new(Room::CatacombsSide, 64, 64),
-    gold_key: Position::new(Room::CatacombsCenter, 32, 64),
-    white_key: Position::new(Room::BlueMazeSouth, 32, 64),
-    black_key: Position::new(Room::RedMazeSouth, 32, 64),
-    gates: Gates {
-        gold: GateState::Closed,
-        white: GateState::Closed,
-        black: GateState::Closed,
-    },
-    bat: Bat {
-        position: Position::new(Room::BelowGoldCastle, 32, 32),
-        direction: Direction {
-            right: false,
-            left: true,
-            up: false,
-            down: true,
-        },
-        animation: 0,
-        carried: None,
-        flight_timer: 0,
-    },
-};
-
-// Ordered reactions and castle associations.
-
-static RHINDLE_REACTIONS: [Reaction; 4] = [
-    Reaction {
-        from: RecordId::Sword,
-        to: RecordId::Rhindle,
-    },
-    Reaction {
-        from: RecordId::Rhindle,
-        to: RecordId::Player,
-    },
-    Reaction {
-        from: RecordId::Rhindle,
-        to: RecordId::Chalice,
-    },
-    Reaction {
-        from: RecordId::Rhindle,
-        to: RecordId::WhiteKey,
-    },
-];
-
-static YORGLE_REACTIONS: [Reaction; 4] = [
-    Reaction {
-        from: RecordId::Sword,
-        to: RecordId::Yorgle,
-    },
-    Reaction {
-        from: RecordId::GoldKey,
-        to: RecordId::Yorgle,
-    },
-    Reaction {
-        from: RecordId::Yorgle,
-        to: RecordId::Player,
-    },
-    Reaction {
-        from: RecordId::Yorgle,
-        to: RecordId::Chalice,
-    },
-];
-
-static GRUNDLE_REACTIONS: [Reaction; 6] = [
-    Reaction {
-        from: RecordId::Sword,
-        to: RecordId::Grundle,
-    },
-    Reaction {
-        from: RecordId::Grundle,
-        to: RecordId::Player,
-    },
-    Reaction {
-        from: RecordId::Grundle,
-        to: RecordId::Chalice,
-    },
-    Reaction {
-        from: RecordId::Grundle,
-        to: RecordId::Bridge,
-    },
-    Reaction {
-        from: RecordId::Grundle,
-        to: RecordId::Magnet,
-    },
-    Reaction {
-        from: RecordId::Grundle,
-        to: RecordId::BlackKey,
-    },
-];
-
-const DRAGON_BITE_DELAYS: [[u8; 2]; 3] = [[0xd0, 0xe8], [0xf0, 0xf6], [0xf0, 0xf6]];
-
-static BAT_REACTIONS: [Reaction; 10] = [
-    Reaction {
-        from: RecordId::Bat,
-        to: RecordId::Chalice,
-    },
-    Reaction {
-        from: RecordId::Bat,
-        to: RecordId::Sword,
-    },
-    Reaction {
-        from: RecordId::Bat,
-        to: RecordId::Bridge,
-    },
-    Reaction {
-        from: RecordId::Bat,
-        to: RecordId::GoldKey,
-    },
-    Reaction {
-        from: RecordId::Bat,
-        to: RecordId::WhiteKey,
-    },
-    Reaction {
-        from: RecordId::Bat,
-        to: RecordId::BlackKey,
-    },
-    Reaction {
-        from: RecordId::Bat,
-        to: RecordId::Rhindle,
-    },
-    Reaction {
-        from: RecordId::Bat,
-        to: RecordId::Yorgle,
-    },
-    Reaction {
-        from: RecordId::Bat,
-        to: RecordId::Grundle,
-    },
-    Reaction {
-        from: RecordId::Bat,
-        to: RecordId::Magnet,
-    },
-];
-
-const GATE_OBJECTS: [ObjectId; 3] = [ObjectId::GoldGate, ObjectId::WhiteGate, ObjectId::BlackGate];
-
-const GATE_KEYS: [ObjectId; 3] = [ObjectId::GoldKey, ObjectId::WhiteKey, ObjectId::BlackKey];
-
-const CASTLE_INTERIORS: [Room; 3] = [
-    Room::GoldTreasury,
-    Room::WhiteCastleInterior,
-    Room::BlackCastleInterior,
-];
-
-const CASTLE_OUTSIDES: [Room; 3] = [Room::GoldCastle, Room::WhiteCastle, Room::BlackCastle];
-
-static MAGNET_REACTIONS: [Reaction; 6] = [
-    Reaction {
-        from: RecordId::GoldKey,
-        to: RecordId::Magnet,
-    },
-    Reaction {
-        from: RecordId::WhiteKey,
-        to: RecordId::Magnet,
-    },
-    Reaction {
-        from: RecordId::BlackKey,
-        to: RecordId::Magnet,
-    },
-    Reaction {
-        from: RecordId::Sword,
-        to: RecordId::Magnet,
-    },
-    Reaction {
-        from: RecordId::Bridge,
-        to: RecordId::Magnet,
-    },
-    Reaction {
-        from: RecordId::Chalice,
-        to: RecordId::Magnet,
-    },
-];
-
-// Wall layouts and room map.
+// Wall artwork and room identities.
 
 static WALLS_SECRET_PASSAGE: [PlayfieldRow; 7] = [
     PlayfieldRow::new(0xf0, 0xff, 0xff),
@@ -2072,653 +2036,7 @@ const ROOM_IDS: [Room; 31] = [
     Room::RobinettCredits,
 ];
 
-static ROOMS: [RoomDefinition; 31] = [
-    // $00: GameSelection.
-    RoomDefinition {
-        walls: &WALLS_ENCLOSED_ROOM,
-        color: ColorChoice::Fixed(0x66),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::GameSelection),
-            Exit::Room(Room::GameSelection),
-            Exit::Room(Room::GameSelection),
-            Exit::Room(Room::GameSelection),
-        ],
-    },
-    // $01: WestHall.
-    RoomDefinition {
-        walls: &WALLS_OPEN_HALL,
-        color: ColorChoice::Fixed(0xd8),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: true,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlueMazeEntrance),
-            Exit::Room(Room::BelowGoldCastle),
-            Exit::ByGame(0),
-            Exit::Room(Room::SecretPassage),
-        ],
-    },
-    // $02: BelowGoldCastle.
-    RoomDefinition {
-        walls: &WALLS_OPEN_HALL,
-        color: ColorChoice::Fixed(0xc8),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::GoldCastle),
-            Exit::Room(Room::SecretPassage),
-            Exit::ByGame(1),
-            Exit::Room(Room::WestHall),
-        ],
-    },
-    // $03: SecretPassage.
-    RoomDefinition {
-        walls: &WALLS_SECRET_PASSAGE,
-        color: ColorChoice::Fixed(0xe8),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: true,
-        exits: [
-            Exit::Room(Room::BlueMazeSouth),
-            Exit::Room(Room::WestHall),
-            Exit::ByGame(2),
-            Exit::Room(Room::BelowGoldCastle),
-        ],
-    },
-    // $04: BlueMazeNorth.
-    RoomDefinition {
-        walls: &WALLS_BLUE_MAZE_NORTH,
-        color: ColorChoice::Fixed(0x86),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlackCastle),
-            Exit::Room(Room::BlueMaze05),
-            Exit::Room(Room::BlueMazeCenter),
-            Exit::Room(Room::BlueMazeSouth),
-        ],
-    },
-    // $05: BlueMaze05.
-    RoomDefinition {
-        walls: &WALLS_BLUE_MAZE_05,
-        color: ColorChoice::Fixed(0x86),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::RedHall),
-            Exit::Room(Room::BlueMazeSouth),
-            Exit::Room(Room::BlueMazeEntrance),
-            Exit::Room(Room::BlueMazeNorth),
-        ],
-    },
-    // $06: BlueMazeSouth.
-    RoomDefinition {
-        walls: &WALLS_BLUE_MAZE_SOUTH,
-        color: ColorChoice::Fixed(0x86),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlueMazeCenter),
-            Exit::Room(Room::BlueMazeNorth),
-            Exit::Room(Room::SecretPassage),
-            Exit::Room(Room::BlueMaze05),
-        ],
-    },
-    // $07: BlueMazeCenter.
-    RoomDefinition {
-        walls: &WALLS_BLUE_MAZE_CENTER,
-        color: ColorChoice::Fixed(0x86),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlueMazeNorth),
-            Exit::Room(Room::BlueMazeEntrance),
-            Exit::Room(Room::BlueMazeSouth),
-            Exit::Room(Room::BlueMazeEntrance),
-        ],
-    },
-    // $08: BlueMazeEntrance.
-    RoomDefinition {
-        walls: &WALLS_BLUE_MAZE_ENTRANCE,
-        color: ColorChoice::Fixed(0x86),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlueMaze05),
-            Exit::Room(Room::BlueMazeCenter),
-            Exit::Room(Room::WestHall),
-            Exit::Room(Room::BlueMazeCenter),
-        ],
-    },
-    // $09: CatacombsCenter.
-    RoomDefinition {
-        walls: &WALLS_CATACOMBS_CENTER,
-        color: ColorChoice::Fixed(0x08),
-        monochrome: ColorChoice::Fixed(0x08),
-        mirrored: true,
-        foreground_priority: true,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::CatacombsEntrance),
-            Exit::Room(Room::CatacombsEntrance),
-            Exit::Room(Room::CatacombsSide),
-            Exit::Room(Room::CatacombsEntrance),
-        ],
-    },
-    // $0A: CatacombsEntrance.
-    RoomDefinition {
-        walls: &WALLS_CATACOMBS_ENTRANCE,
-        color: ColorChoice::Fixed(0x08),
-        monochrome: ColorChoice::Fixed(0x08),
-        mirrored: true,
-        foreground_priority: true,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::SecretPassage),
-            Exit::Room(Room::CatacombsCenter),
-            Exit::Room(Room::CatacombsCenter),
-            Exit::Room(Room::CatacombsCenter),
-        ],
-    },
-    // $0B: CatacombsSide.
-    RoomDefinition {
-        walls: &WALLS_CATACOMBS_SIDE,
-        color: ColorChoice::Fixed(0x08),
-        monochrome: ColorChoice::Fixed(0x08),
-        mirrored: true,
-        foreground_priority: true,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::CatacombsCenter),
-            Exit::Room(Room::SidePassage0c),
-            Exit::Room(Room::PurpleChamber),
-            Exit::Room(Room::SidePassage0d),
-        ],
-    },
-    // $0C: SidePassage0c.
-    RoomDefinition {
-        walls: &WALLS_SIDE_PASSAGE,
-        color: ColorChoice::Fixed(0x98),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: true,
-        exits: [
-            Exit::Room(Room::PurpleChamber),
-            Exit::Room(Room::SidePassage0d),
-            Exit::Room(Room::RedHall),
-            Exit::Room(Room::CatacombsSide),
-        ],
-    },
-    // $0D: SidePassage0d.
-    RoomDefinition {
-        walls: &WALLS_SIDE_PASSAGE,
-        color: ColorChoice::Fixed(0xb8),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: true,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::WhiteCastle),
-            Exit::Room(Room::CatacombsSide),
-            Exit::Room(Room::AboveWhiteCastle),
-            Exit::Room(Room::SidePassage0c),
-        ],
-    },
-    // $0E: AboveWhiteCastle.
-    RoomDefinition {
-        walls: &WALLS_TOP_OPENING,
-        color: ColorChoice::Fixed(0xa8),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::SidePassage0d),
-            Exit::Room(Room::BlackCastle),
-            Exit::Room(Room::WhiteCastle),
-            Exit::Room(Room::BlackCastle),
-        ],
-    },
-    // $0F: WhiteCastle.
-    RoomDefinition {
-        walls: &WALLS_CASTLE,
-        color: ColorChoice::Fixed(0x0c),
-        monochrome: ColorChoice::Fixed(0x0c),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::AboveWhiteCastle),
-            Exit::Room(Room::WhiteCastle),
-            Exit::Room(Room::SidePassage0d),
-            Exit::Room(Room::WhiteCastle),
-        ],
-    },
-    // $10: BlackCastle.
-    RoomDefinition {
-        walls: &WALLS_CASTLE,
-        color: ColorChoice::Fixed(0x00),
-        monochrome: ColorChoice::Fixed(0x02),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::WestHall),
-            Exit::Room(Room::PurpleChamber),
-            Exit::Room(Room::BlueMazeNorth),
-            Exit::Room(Room::PurpleChamber),
-        ],
-    },
-    // $11: GoldCastle.
-    RoomDefinition {
-        walls: &WALLS_CASTLE,
-        color: ColorChoice::Fixed(0x1a),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlueMazeSouth),
-            Exit::Room(Room::SecretPassage),
-            Exit::Room(Room::BelowGoldCastle),
-            Exit::Room(Room::WestHall),
-        ],
-    },
-    // $12: GoldTreasury.
-    RoomDefinition {
-        walls: &WALLS_ENCLOSED_ROOM,
-        color: ColorChoice::Fixed(0x1a),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::GoldTreasury),
-            Exit::Room(Room::GoldTreasury),
-            Exit::Room(Room::GoldTreasury),
-            Exit::Room(Room::GoldTreasury),
-        ],
-    },
-    // $13: BlackMaze13.
-    RoomDefinition {
-        walls: &WALLS_BLACK_MAZE_13,
-        color: ColorChoice::Fixed(0x08),
-        monochrome: ColorChoice::Fixed(0x08),
-        mirrored: true,
-        foreground_priority: true,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlackMazeDot),
-            Exit::Room(Room::BlackMaze14),
-            Exit::Room(Room::BlackMazeDot),
-            Exit::Room(Room::BlackMazeEntrance),
-        ],
-    },
-    // $14: BlackMaze14.
-    RoomDefinition {
-        walls: &WALLS_BLACK_MAZE_14,
-        color: ColorChoice::Fixed(0x08),
-        monochrome: ColorChoice::Fixed(0x08),
-        mirrored: false,
-        foreground_priority: true,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlackMazeEntrance),
-            Exit::Room(Room::BlackMazeDot),
-            Exit::Room(Room::BlackMazeEntrance),
-            Exit::Room(Room::BlackMaze13),
-        ],
-    },
-    // $15: BlackMazeDot.
-    RoomDefinition {
-        walls: &WALLS_BLACK_MAZE_DOT,
-        color: ColorChoice::Fixed(0x08),
-        monochrome: ColorChoice::Fixed(0x08),
-        mirrored: false,
-        foreground_priority: true,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlackMaze13),
-            Exit::Room(Room::BlackMazeEntrance),
-            Exit::Room(Room::BlackMaze13),
-            Exit::Room(Room::BlackMaze14),
-        ],
-    },
-    // $16: BlackMazeEntrance.
-    RoomDefinition {
-        walls: &WALLS_BLACK_MAZE_ENTRANCE,
-        color: ColorChoice::Fixed(0x08),
-        monochrome: ColorChoice::Fixed(0x08),
-        mirrored: true,
-        foreground_priority: true,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlackMaze14),
-            Exit::Room(Room::BlackMaze13),
-            Exit::Room(Room::BlackCastleInterior),
-            Exit::Room(Room::BlackMazeDot),
-        ],
-    },
-    // $17: RedMaze17.
-    RoomDefinition {
-        walls: &WALLS_RED_MAZE_17,
-        color: ColorChoice::Fixed(0x36),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::RedMazeSouth),
-            Exit::Room(Room::RedMazeNorth),
-            Exit::Room(Room::RedMazeSouth),
-            Exit::Room(Room::RedMazeNorth),
-        ],
-    },
-    // $18: RedMazeNorth.
-    RoomDefinition {
-        walls: &WALLS_RED_MAZE_NORTH,
-        color: ColorChoice::Fixed(0x36),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::WhiteCastleInterior),
-            Exit::Room(Room::RedMaze17),
-            Exit::Room(Room::WhiteCastleInterior),
-            Exit::Room(Room::RedMaze17),
-        ],
-    },
-    // $19: RedMazeSouth.
-    RoomDefinition {
-        walls: &WALLS_RED_MAZE_SOUTH,
-        color: ColorChoice::Fixed(0x36),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::RedMaze17),
-            Exit::Room(Room::WhiteCastleInterior),
-            Exit::Room(Room::RedMaze17),
-            Exit::Room(Room::WhiteCastleInterior),
-        ],
-    },
-    // $1A: WhiteCastleInterior.
-    RoomDefinition {
-        walls: &WALLS_WHITE_CASTLE_INTERIOR,
-        color: ColorChoice::Fixed(0x36),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::RedMazeNorth),
-            Exit::Room(Room::RedMazeSouth),
-            Exit::Room(Room::RedMazeNorth),
-            Exit::Room(Room::RedMazeSouth),
-        ],
-    },
-    // $1B: BlackCastleInterior.
-    RoomDefinition {
-        walls: &WALLS_BLACK_CASTLE_INTERIOR,
-        color: ColorChoice::Fixed(0x36),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::ByGame(3),
-            Exit::ByGame(3),
-            Exit::ByGame(3),
-            Exit::ByGame(3),
-        ],
-    },
-    // $1C: PurpleChamber.
-    RoomDefinition {
-        walls: &WALLS_ENCLOSED_ROOM,
-        color: ColorChoice::Fixed(0x66),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::RedHall),
-            Exit::Room(Room::BlueMazeCenter),
-            Exit::ByGame(4),
-            Exit::Room(Room::BlueMazeEntrance),
-        ],
-    },
-    // $1D: RedHall.
-    RoomDefinition {
-        walls: &WALLS_TOP_OPENING,
-        color: ColorChoice::Fixed(0x36),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::ByGame(5),
-            Exit::Room(Room::WestHall),
-            Exit::Room(Room::BlackCastle),
-            Exit::Room(Room::SecretPassage),
-        ],
-    },
-    // $1E: RobinettCredits.
-    RoomDefinition {
-        walls: &WALLS_OPEN_HALL,
-        color: ColorChoice::Fixed(0x66),
-        monochrome: ColorChoice::Fixed(0x0a),
-        mirrored: true,
-        foreground_priority: false,
-        player_width: 4,
-        left_barrier: false,
-        right_barrier: false,
-        exits: [
-            Exit::Room(Room::BlueMazeSouth),
-            Exit::Room(Room::WestHall),
-            Exit::Room(Room::BlueMazeSouth),
-            Exit::Room(Room::SecretPassage),
-        ],
-    },
-];
-
-static GAME_DEPENDENT_EXITS: [[Room; 3]; 6] = [
-    [Room::BlackCastle, Room::WhiteCastle, Room::WhiteCastle],
-    [Room::BlueMaze05, Room::GoldCastle, Room::GoldCastle],
-    [
-        Room::RedHall,
-        Room::CatacombsEntrance,
-        Room::CatacombsEntrance,
-    ],
-    [
-        Room::PurpleChamber,
-        Room::BlackMazeEntrance,
-        Room::BlackMazeEntrance,
-    ],
-    [
-        Room::BlackCastleInterior,
-        Room::SidePassage0c,
-        Room::SidePassage0c,
-    ],
-    [
-        Room::SecretPassage,
-        Room::SidePassage0c,
-        Room::SidePassage0c,
-    ],
-];
-
-// Sprite artwork and image ranges.
-
-static GATE_IMAGES: [ImageChoice; 13] = [
-    ImageChoice {
-        ceiling: 0x04,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 12,
-        },
-    },
-    ImageChoice {
-        ceiling: 0x08,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 10,
-        },
-    },
-    ImageChoice {
-        ceiling: 0x0c,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 8,
-        },
-    },
-    ImageChoice {
-        ceiling: 0x10,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 6,
-        },
-    },
-    ImageChoice {
-        ceiling: 0x14,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 4,
-        },
-    },
-    ImageChoice {
-        ceiling: 0x18,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 2,
-        },
-    },
-    ImageChoice {
-        ceiling: 0x1c,
-        bitmap: Bitmap::new(&GATE_IMAGE),
-    },
-    ImageChoice {
-        ceiling: 0x20,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 2,
-        },
-    },
-    ImageChoice {
-        ceiling: 0x24,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 4,
-        },
-    },
-    ImageChoice {
-        ceiling: 0x28,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 6,
-        },
-    },
-    ImageChoice {
-        ceiling: 0x2c,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 8,
-        },
-    },
-    ImageChoice {
-        ceiling: 0x30,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 10,
-        },
-    },
-    ImageChoice {
-        ceiling: 0xff,
-        bitmap: Bitmap {
-            rows: &GATE_IMAGE,
-            start: 12,
-        },
-    },
-];
+// Sprite artwork.
 
 static GATE_IMAGE: [u8; 17] = [
     0xfe, // |███████ |
@@ -2739,17 +2057,6 @@ static GATE_IMAGE: [u8; 17] = [
     0xaa, // |█ █ █ █ |
     0x00, // |        |
 ];
-
-const GOLD_GATE_POSITION: Position = Position::new(Room::GoldCastle, 77, 49);
-
-const WHITE_GATE_POSITION: Position = Position::new(Room::WhiteCastle, 77, 49);
-
-const BLACK_GATE_POSITION: Position = Position::new(Room::BlackCastle, 77, 49);
-
-static LIGHT_IMAGES: [ImageChoice; 1] = [ImageChoice {
-    ceiling: 0xff,
-    bitmap: Bitmap::new(&LIGHT_IMAGE),
-}];
 
 static LIGHT_IMAGE: [u8; 33] = [
     0xff, // |████████|
@@ -2786,11 +2093,6 @@ static LIGHT_IMAGE: [u8; 33] = [
     0xff, // |████████|
     0x00, // |        |
 ];
-
-static BRIDGE_IMAGES: [ImageChoice; 1] = [ImageChoice {
-    ceiling: 0xff,
-    bitmap: Bitmap::new(&BRIDGE_IMAGE),
-}];
 
 static BRIDGE_IMAGE: [u8; 25] = [
     0xc3, // |██    ██|
@@ -2831,11 +2133,6 @@ static GAME_ONE_IMAGE: [u8; 8] = [
     0x00, // |        |
 ];
 
-static KEY_IMAGES: [ImageChoice; 1] = [ImageChoice {
-    ceiling: 0xff,
-    bitmap: Bitmap::new(&KEY_IMAGE),
-}];
-
 static KEY_IMAGE: [u8; 4] = [
     0x07, // |     ███|
     0xfd, // |██████ █|
@@ -2865,17 +2162,6 @@ static GAME_THREE_IMAGE: [u8; 8] = [
     0x00, // |        |
 ];
 
-static BAT_IMAGES: [ImageChoice; 2] = [
-    ImageChoice {
-        ceiling: 0x03,
-        bitmap: Bitmap::new(&BAT_FRAME_ONE),
-    },
-    ImageChoice {
-        ceiling: 0xff,
-        bitmap: Bitmap::new(&BAT_FRAME_TWO),
-    },
-];
-
 static BAT_FRAME_ONE: [u8; 8] = [
     0x81, // |█      █|
     0x81, // |█      █|
@@ -2900,25 +2186,6 @@ static BAT_FRAME_TWO: [u8; 12] = [
     0x81, // |█      █|
     0x81, // |█      █|
     0x00, // |        |
-];
-
-static DRAGON_IMAGES: [ImageChoice; 4] = [
-    ImageChoice {
-        ceiling: 0x00,
-        bitmap: Bitmap::new(&DRAGON_WALKING_IMAGE),
-    },
-    ImageChoice {
-        ceiling: 0x01,
-        bitmap: Bitmap::new(&DRAGON_DEAD_IMAGE),
-    },
-    ImageChoice {
-        ceiling: 0x02,
-        bitmap: Bitmap::new(&DRAGON_WALKING_IMAGE),
-    },
-    ImageChoice {
-        ceiling: 0xff,
-        bitmap: Bitmap::new(&DRAGON_BITING_IMAGE),
-    },
 ];
 
 static DRAGON_WALKING_IMAGE: [u8; 21] = [
@@ -2992,11 +2259,6 @@ static DRAGON_DEAD_IMAGE: [u8; 18] = [
     0x00, // |        |
 ];
 
-static SWORD_IMAGES: [ImageChoice; 1] = [ImageChoice {
-    ceiling: 0xff,
-    bitmap: Bitmap::new(&SWORD_IMAGE),
-}];
-
 static SWORD_IMAGE: [u8; 6] = [
     0x20, // |  █     |
     0x40, // | █      |
@@ -3005,11 +2267,6 @@ static SWORD_IMAGE: [u8; 6] = [
     0x20, // |  █     |
     0x00, // |        |
 ];
-
-static DOT_IMAGES: [ImageChoice; 1] = [ImageChoice {
-    ceiling: 0xff,
-    bitmap: Bitmap::new(&DOT_IMAGE),
-}];
 
 static DOT_IMAGE: [u8; 2] = [
     0x80, // |█       |
@@ -3115,18 +2372,6 @@ static ROBINETT_CREDITS_IMAGE: [u8; 96] = [
     0x00, // |        |
 ];
 
-const ROBINETT_CREDITS_POSITION: Position = Position::new(Room::RobinettCredits, 80, 105);
-
-static ROBINETT_CREDITS_IMAGES: [ImageChoice; 1] = [ImageChoice {
-    ceiling: 0xff,
-    bitmap: Bitmap::new(&ROBINETT_CREDITS_IMAGE),
-}];
-
-static CHALICE_IMAGES: [ImageChoice; 1] = [ImageChoice {
-    ceiling: 0xff,
-    bitmap: Bitmap::new(&CHALICE_IMAGE),
-}];
-
 static CHALICE_IMAGE: [u8; 10] = [
     0x81, // |█      █|
     0x81, // |█      █|
@@ -3140,36 +2385,9 @@ static CHALICE_IMAGE: [u8; 10] = [
     0x00, // |        |
 ];
 
-static EMPTY_IMAGES: [ImageChoice; 1] = [ImageChoice {
-    ceiling: 0xff,
-    bitmap: Bitmap::new(&EMPTY_IMAGE),
-}];
-
 static EMPTY_IMAGE: [u8; 1] = [
     0x00, // |        |
 ];
-
-const GAME_NUMBER_POSITION: Position = Position::new(Room::GameSelection, 80, 64);
-
-static GAME_NUMBER_IMAGES: [ImageChoice; 3] = [
-    ImageChoice {
-        ceiling: 0x01,
-        bitmap: Bitmap::new(&GAME_ONE_IMAGE),
-    },
-    ImageChoice {
-        ceiling: 0x03,
-        bitmap: Bitmap::new(&GAME_TWO_IMAGE),
-    },
-    ImageChoice {
-        ceiling: 0xff,
-        bitmap: Bitmap::new(&GAME_THREE_IMAGE),
-    },
-];
-
-static MAGNET_IMAGES: [ImageChoice; 1] = [ImageChoice {
-    ceiling: 0xff,
-    bitmap: Bitmap::new(&MAGNET_IMAGE),
-}];
 
 static MAGNET_IMAGE: [u8; 9] = [
     0x3c, // |  ████  |
@@ -3181,182 +2399,6 @@ static MAGNET_IMAGE: [u8; 9] = [
     0xc3, // |██    ██|
     0xc3, // |██    ██|
     0x00, // |        |
-];
-
-// Object catalog.
-
-static OBJECT_CATALOG: [ObjectDescriptor; 19] = [
-    // Light.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Light),
-        state: StateSource::Fixed(0),
-        images: &LIGHT_IMAGES,
-        color: ColorChoice::Fixed(0x28),
-        monochrome: ColorChoice::Fixed(0x0c),
-        style: SpriteWidth::Wide,
-    },
-    // GoldGate.
-    ObjectDescriptor {
-        position: PositionSource::Fixed(GOLD_GATE_POSITION),
-        state: StateSource::Gate(GateId::Gold),
-        images: &GATE_IMAGES,
-        color: ColorChoice::Fixed(0x00),
-        monochrome: ColorChoice::Fixed(0x00),
-        style: SpriteWidth::Normal,
-    },
-    // WhiteGate.
-    ObjectDescriptor {
-        position: PositionSource::Fixed(WHITE_GATE_POSITION),
-        state: StateSource::Gate(GateId::White),
-        images: &GATE_IMAGES,
-        color: ColorChoice::Fixed(0x00),
-        monochrome: ColorChoice::Fixed(0x00),
-        style: SpriteWidth::Normal,
-    },
-    // BlackGate.
-    ObjectDescriptor {
-        position: PositionSource::Fixed(BLACK_GATE_POSITION),
-        state: StateSource::Gate(GateId::Black),
-        images: &GATE_IMAGES,
-        color: ColorChoice::Fixed(0x00),
-        monochrome: ColorChoice::Fixed(0x00),
-        style: SpriteWidth::Normal,
-    },
-    // Credits.
-    ObjectDescriptor {
-        position: PositionSource::Fixed(ROBINETT_CREDITS_POSITION),
-        state: StateSource::Fixed(0),
-        images: &ROBINETT_CREDITS_IMAGES,
-        color: ColorChoice::Cycling,
-        monochrome: ColorChoice::Fixed(0x00),
-        style: SpriteWidth::Normal,
-    },
-    // GameNumber.
-    ObjectDescriptor {
-        position: PositionSource::Fixed(GAME_NUMBER_POSITION),
-        state: StateSource::GameNumber,
-        images: &GAME_NUMBER_IMAGES,
-        color: ColorChoice::Fixed(0xc8),
-        monochrome: ColorChoice::Fixed(0x00),
-        style: SpriteWidth::Normal,
-    },
-    // Rhindle.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Rhindle),
-        state: StateSource::Dragon(DragonId::Rhindle),
-        images: &DRAGON_IMAGES,
-        color: ColorChoice::Fixed(0x36),
-        monochrome: ColorChoice::Fixed(0x0e),
-        style: SpriteWidth::Normal,
-    },
-    // Yorgle.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Yorgle),
-        state: StateSource::Dragon(DragonId::Yorgle),
-        images: &DRAGON_IMAGES,
-        color: ColorChoice::Fixed(0x1a),
-        monochrome: ColorChoice::Fixed(0x06),
-        style: SpriteWidth::Normal,
-    },
-    // Grundle.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Grundle),
-        state: StateSource::Dragon(DragonId::Grundle),
-        images: &DRAGON_IMAGES,
-        color: ColorChoice::Fixed(0xc8),
-        monochrome: ColorChoice::Fixed(0x00),
-        style: SpriteWidth::Normal,
-    },
-    // Sword.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Sword),
-        state: StateSource::Fixed(0),
-        images: &SWORD_IMAGES,
-        color: ColorChoice::Fixed(0x1a),
-        monochrome: ColorChoice::Fixed(0x06),
-        style: SpriteWidth::Normal,
-    },
-    // Bridge.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Bridge),
-        state: StateSource::Fixed(0),
-        images: &BRIDGE_IMAGES,
-        color: ColorChoice::Fixed(0x66),
-        monochrome: ColorChoice::Fixed(0x02),
-        style: SpriteWidth::Wide,
-    },
-    // GoldKey.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::GoldKey),
-        state: StateSource::Fixed(0),
-        images: &KEY_IMAGES,
-        color: ColorChoice::Fixed(0x1a),
-        monochrome: ColorChoice::Fixed(0x06),
-        style: SpriteWidth::Normal,
-    },
-    // WhiteKey.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::WhiteKey),
-        state: StateSource::Fixed(0),
-        images: &KEY_IMAGES,
-        color: ColorChoice::Fixed(0x0e),
-        monochrome: ColorChoice::Fixed(0x0e),
-        style: SpriteWidth::Normal,
-    },
-    // BlackKey.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::BlackKey),
-        state: StateSource::Fixed(0),
-        images: &KEY_IMAGES,
-        color: ColorChoice::Fixed(0x00),
-        monochrome: ColorChoice::Fixed(0x00),
-        style: SpriteWidth::Normal,
-    },
-    // Bat.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Bat),
-        state: StateSource::BatAnimation,
-        images: &BAT_IMAGES,
-        color: ColorChoice::Fixed(0x00),
-        monochrome: ColorChoice::Fixed(0x00),
-        style: SpriteWidth::Normal,
-    },
-    // Dot.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Dot),
-        state: StateSource::Fixed(0),
-        images: &DOT_IMAGES,
-        color: ColorChoice::Fixed(0x08),
-        monochrome: ColorChoice::Fixed(0x08),
-        style: SpriteWidth::Normal,
-    },
-    // Chalice.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Chalice),
-        state: StateSource::Fixed(0),
-        images: &CHALICE_IMAGES,
-        color: ColorChoice::Cycling,
-        monochrome: ColorChoice::Fixed(0x06),
-        style: SpriteWidth::Normal,
-    },
-    // Magnet.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Magnet),
-        state: StateSource::Fixed(0),
-        images: &MAGNET_IMAGES,
-        color: ColorChoice::Fixed(0x00),
-        monochrome: ColorChoice::Fixed(0x06),
-        style: SpriteWidth::Normal,
-    },
-    // Empty.
-    ObjectDescriptor {
-        position: PositionSource::Record(RecordId::Bridge),
-        state: StateSource::Fixed(0),
-        images: &EMPTY_IMAGES,
-        color: ColorChoice::Fixed(0x00),
-        monochrome: ColorChoice::Fixed(0x00),
-        style: SpriteWidth::Normal,
-    },
 ];
 
 #[cfg(test)]

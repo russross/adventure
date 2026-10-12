@@ -1,7 +1,6 @@
 use super::{
-    Adventure, Bitmap, DragonId, DragonState, GRUNDLE_REACTIONS, Game, GateState, Gates,
-    MovementPhase, OBJECT_CATALOG, ObjectId, Position, RHINDLE_REACTIONS, ROOM_IDS, RecordId, Room,
-    SoundEffect, YORGLE_REACTIONS,
+    Adventure, Bitmap, DragonId, DragonState, Game, GateState, Gates, MovementPhase, OBJECT_IDS,
+    ObjectId, Position, ROOM_IDS, RecordId, Room, SoundEffect,
 };
 use crate::hardware::FrameHost;
 use crate::input::{Controls, Difficulty, Direction};
@@ -61,6 +60,14 @@ fn direction_byte(direction: Direction) -> u8 {
     value
 }
 
+fn game_number_byte(game: Game) -> u8 {
+    match game {
+        Game::One => 0,
+        Game::Two => 2,
+        Game::Three => 4,
+    }
+}
+
 fn initialized(game: Game) -> Adventure {
     let mut adventure = Adventure::default();
     adventure.world.game = game;
@@ -85,7 +92,12 @@ fn reference(game: &Adventure) -> Cpu {
         (0xae, game.world.grundle),
     ] {
         cpu.memory[address + 3] = direction_byte(dragon.direction);
-        cpu.memory[address + 4] = dragon.state.value();
+        cpu.memory[address + 4] = match dragon.state {
+            DragonState::Wandering => 0,
+            DragonState::Dead => 1,
+            DragonState::Swallowed => 2,
+            DragonState::Biting(value) => value,
+        };
     }
     cpu.memory[0xc8] = game.world.gates.gold.value();
     cpu.memory[0xc9] = game.world.gates.white.value();
@@ -103,7 +115,7 @@ fn reference(game: &Adventure) -> Cpu {
     cpu.memory[0x9e] = game.world.held_offset_x;
     cpu.memory[0x9f] = game.world.held_offset_y;
     cpu.memory[0x99] = direction_byte(game.world.joystick_direction);
-    cpu.memory[0xdd] = game.world.game.index() as u8 * 2;
+    cpu.memory[0xdd] = game_number_byte(game.world.game);
     cpu.memory[0xde] = if game.world.won { 255 } else { 0 };
     cpu.memory[0xdf] = game.world.sound_remaining;
     cpu.memory[0xe0] = game.world.sound_effect as u8;
@@ -320,13 +332,13 @@ fn dragon_state_machine_matches_rom_across_games_and_difficulties() {
                         ..Contacts::default()
                     };
                     let mut cpu = reference(&port);
-                    let (entry, list, speed) = match dragon {
-                        DragonId::Rhindle => (0xf795, &RHINDLE_REACTIONS[..], 3),
-                        DragonId::Yorgle => (0xf7b0, &YORGLE_REACTIONS[..], 2),
-                        DragonId::Grundle => (0xf7cb, &GRUNDLE_REACTIONS[..], 2),
+                    let entry = match dragon {
+                        DragonId::Rhindle => 0xf795,
+                        DragonId::Yorgle => 0xf7b0,
+                        DragonId::Grundle => 0xf7cb,
                     };
                     cpu.call(entry);
-                    port.update_dragon(dragon, list, speed);
+                    port.update_dragon(dragon);
                     assert_state(
                         &port,
                         &cpu,
@@ -382,6 +394,177 @@ fn bat_gates_magnet_and_darkness_match_rom() {
 }
 
 #[test]
+fn dragon_priorities_and_retained_headings_match_rom() {
+    // Exercise competing fears and treasures independently of any particular starting layout.
+    let candidates = [
+        RecordId::Sword,
+        RecordId::GoldKey,
+        RecordId::Player,
+        RecordId::Chalice,
+        RecordId::Bridge,
+        RecordId::Magnet,
+        RecordId::WhiteKey,
+        RecordId::BlackKey,
+    ];
+    for dragon in [DragonId::Rhindle, DragonId::Yorgle, DragonId::Grundle] {
+        for difficulty in [Difficulty::A, Difficulty::B] {
+            for present in 0u16..256 {
+                for aligned in [false, true] {
+                    let mut port = initialized(Game::Two);
+                    port.controls.right_difficulty = difficulty;
+                    port.world.dragon_mut(dragon).position = Position::new(Room::WestHall, 80, 50);
+                    port.world.dragon_mut(dragon).direction = Direction {
+                        right: true,
+                        down: true,
+                        ..Direction::default()
+                    };
+                    for (index, record) in candidates.into_iter().enumerate() {
+                        let room = if present & (1 << index) != 0 {
+                            Room::WestHall
+                        } else {
+                            Room::RedHall
+                        };
+                        *port.world.position_mut(record) = if aligned {
+                            Position::new(room, 80, 50)
+                        } else {
+                            Position::new(room, 60, 70)
+                        };
+                    }
+
+                    // The ROM supplies the expected priority, including aligned and absent targets.
+                    let mut cpu = reference(&port);
+                    cpu.call(match dragon {
+                        DragonId::Rhindle => 0xf795,
+                        DragonId::Yorgle => 0xf7b0,
+                        DragonId::Grundle => 0xf7cb,
+                    });
+                    port.update_dragon(dragon);
+                    assert_state(
+                        &port,
+                        &cpu,
+                        &format!("priority {dragon:?} {difficulty:?} {present} {aligned}"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bat_cargo_exclusion_and_magnet_priorities_match_rom() {
+    let items = [
+        RecordId::Chalice,
+        RecordId::Sword,
+        RecordId::Bridge,
+        RecordId::GoldKey,
+        RecordId::WhiteKey,
+        RecordId::BlackKey,
+        RecordId::Rhindle,
+        RecordId::Yorgle,
+        RecordId::Grundle,
+        RecordId::Magnet,
+    ];
+    for first in 0..=items.len() {
+        for carried in [None, Some(RecordId::Chalice), Some(RecordId::Sword)] {
+            for aligned in [false, true] {
+                let mut port = initialized(Game::Two);
+                port.world.bat.position = Position::new(Room::WestHall, 80, 50);
+                port.world.bat.carried = carried;
+                for (index, record) in items.into_iter().enumerate() {
+                    let room = if index >= first {
+                        Room::WestHall
+                    } else {
+                        Room::RedHall
+                    };
+                    *port.world.position_mut(record) = if aligned {
+                        Position::new(room, 80, 50)
+                    } else {
+                        Position::new(room, 60, 70)
+                    };
+                }
+                let mut cpu = reference(&port);
+                cpu.call(0xf8a5);
+                port.update_bat();
+                assert_state(
+                    &port,
+                    &cpu,
+                    &format!("cargo priority {first} {carried:?} {aligned}"),
+                );
+            }
+        }
+    }
+
+    // Removing earlier attractions exposes every magnet target; alignment must not skip it.
+    let metal = [
+        RecordId::GoldKey,
+        RecordId::WhiteKey,
+        RecordId::BlackKey,
+        RecordId::Sword,
+        RecordId::Bridge,
+        RecordId::Chalice,
+    ];
+    for first in 0..=metal.len() {
+        for aligned in [false, true] {
+            let mut port = initialized(Game::Two);
+            port.world.magnet = Position::new(Room::WestHall, 80, 58);
+            for (index, record) in metal.into_iter().enumerate() {
+                let room = if index >= first {
+                    Room::WestHall
+                } else {
+                    Room::RedHall
+                };
+                *port.world.position_mut(record) = if aligned {
+                    Position::new(room, 80, 50)
+                } else {
+                    Position::new(room, 60, 70)
+                };
+            }
+            let mut cpu = reference(&port);
+            cpu.call(0xf9b3);
+            port.update_magnet();
+            assert_state(&port, &cpu, &format!("magnet priority {first} {aligned}"));
+        }
+    }
+}
+
+#[test]
+fn reinitialization_preserves_retained_state_like_the_rom() {
+    for game in [Game::One, Game::Two, Game::Three] {
+        let mut port = initialized(Game::Two);
+        port.world.player = Position::new(Room::WestHall, 73, 55);
+        port.world.safe_player = port.world.player;
+        port.prepare_room_display();
+        port.world.game = game;
+        port.world.idle_ticks = 37;
+        port.world.idle_periods = 0x90;
+        port.world.light = Position::new(Room::CatacombsSide, 44, 66);
+        port.world.held_offset_x = 19;
+        port.world.held_offset_y = 241;
+        port.world.fire_was_pressed = false;
+        port.world.previous_reset = false;
+        port.world.previous_select = false;
+        port.world.won = true;
+        port.world.sound_remaining = 17;
+        port.world.sound_effect = SoundEffect::Roar;
+        port.world.rhindle.state = DragonState::Dead;
+        port.world.bat.carried = Some(RecordId::Chalice);
+        port.world.bat.flight_timer = 99;
+        port.sound.voice(8, 12, 3);
+
+        // Initialization resets actors but retains counters, light, offsets, audio, and appearance.
+        let appearance = port.display.appearance;
+        let channels = port.sound.channels;
+        let mut cpu = reference(&port);
+        cpu.call(0xf3d3);
+        port.initialize_world(&mut Host::default()).unwrap();
+        assert_state(&port, &cpu, &format!("retained initialization {game:?}"));
+        assert_eq!(port.sound.channels, channels);
+        assert_eq!(port.display.appearance.foreground, appearance.foreground);
+        assert_eq!(port.display.appearance.background, appearance.background);
+    }
+}
+
+#[test]
 fn visible_selection_and_every_object_image_range_match_rom() {
     let rom = include_bytes!("../../../target/refactored-oracle.bin");
     for room in ROOM_IDS {
@@ -407,10 +590,30 @@ fn visible_selection_and_every_object_image_range_match_rom() {
             );
         }
     }
-    for (index, descriptor) in OBJECT_CATALOG.iter().enumerate() {
+    for (index, object) in OBJECT_IDS.into_iter().enumerate() {
         let address = 0xf44 + index * 9 + 4;
         let pointer = usize::from(rom[address]) | usize::from(rom[address + 1]) << 8;
         for state in 0..=255 {
+            let mut port = Adventure::default();
+            match object {
+                ObjectId::GoldGate => port.world.gates.gold = GateState::from_value(state),
+                ObjectId::WhiteGate => port.world.gates.white = GateState::from_value(state),
+                ObjectId::BlackGate => port.world.gates.black = GateState::from_value(state),
+                ObjectId::Rhindle => port.world.rhindle.state = DragonState::from_value(state),
+                ObjectId::Yorgle => port.world.yorgle.state = DragonState::from_value(state),
+                ObjectId::Grundle => port.world.grundle.state = DragonState::from_value(state),
+                ObjectId::Bat => port.world.bat.animation = state,
+                ObjectId::GameNumber => {
+                    // The game number has three valid states; arbitrary byte values are not inputs.
+                    port.world.game = match state {
+                        0 => Game::One,
+                        2 => Game::Two,
+                        4 => Game::Three,
+                        _ => continue,
+                    };
+                }
+                _ => {}
+            }
             let mut range = pointer - 0xf000;
             while state > rom[range] {
                 range += 3;
@@ -418,10 +621,11 @@ fn visible_selection_and_every_object_image_range_match_rom() {
             let bitmap = (usize::from(rom[range + 1]) | usize::from(rom[range + 2]) << 8) - 0xf000;
             let expected =
                 &rom[bitmap..=rom[bitmap..].iter().position(|b| *b == 0).unwrap() + bitmap];
-            let selected = Adventure::default().select_object_image(descriptor.images, state);
+            let selected = port.object_display(object).bitmap;
             assert_eq!(
-                &selected.rows[selected.start..selected.start + expected.len()],
-                expected
+                &selected.rows[..expected.len()],
+                expected,
+                "{object:?} {state}"
             );
         }
     }
@@ -519,7 +723,7 @@ fn startup_samples_held_switches_before_initialization_without_presenting() {
             cpu.call(0xf384);
             assert!(game.advance_turn(&mut host).unwrap());
             assert_eq!(game.world.player.room as u8, cpu.memory[0x8a]);
-            assert_eq!(game.world.game.index() as u8 * 2, cpu.memory[0xdd]);
+            assert_eq!(game_number_byte(game.world.game), cpu.memory[0xdd]);
         }
         assert_eq!(host.lines, [0, HEIGHT, HEIGHT, HEIGHT, HEIGHT, HEIGHT]);
 
