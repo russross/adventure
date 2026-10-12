@@ -158,5 +158,5 @@ impl Synthesizer {
 }
 
 #[cfg(test)]
-#[path = "sound_tests.rs"]
+#[path = "tests/sound.rs"]
 mod tests;

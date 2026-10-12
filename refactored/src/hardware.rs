@@ -312,5 +312,5 @@ fn rgb_color(color: u8) -> [u8; 3] {
 }
 
 #[cfg(test)]
-#[path = "hardware_tests.rs"]
+#[path = "tests/hardware.rs"]
 mod tests;

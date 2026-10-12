@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process;
 
-use adventure_refactored::game::Adventure;
+use adventure_refactored::adventure::Adventure;
 use adventure_refactored::hardware::SdlHardware;
 
 #[derive(Default)]

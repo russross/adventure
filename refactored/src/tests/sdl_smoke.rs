@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::process;
 
-use adventure_refactored::game::{Adventure, ObjectId, Room};
+use adventure_refactored::adventure::{Adventure, ObjectId, Room};
 use adventure_refactored::hardware::{FrameHost, SdlHardware};
 use adventure_refactored::input::Controls;
 use adventure_refactored::sound::{Sound, Synthesizer};

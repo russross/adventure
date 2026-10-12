@@ -8,6 +8,10 @@ default-run = "refactored"
 name = "refactored"
 path = "src/main.rs"
 
+[[bin]]
+name = "sdl_smoke"
+path = "src/tests/sdl_smoke.rs"
+
 [dependencies]
 sdl2 = { version = "0.38", features = ["use-pkgconfig"] }
 

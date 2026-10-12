@@ -5,7 +5,7 @@ Run the refactored game:
 
     make refactored-run
 
-`translation/` keeps the Rust translation in ROM order. `refactored/` is an independent Rust implementation organized around world records, movement, actor behavior, interactions, picture scheduling, and immutable game assets. Its hardware interface accepts complete scanlines instead of persistent drawable operations. Both versions retain line-by-line rendering, the three-picture gameplay cycle, and frame-boundary pacing.
+`translation/` keeps the Rust translation in ROM order. `refactored/` is an independent Rust implementation with all core game code and immutable data in `src/adventure.rs`, hardware modules directly in `src/`, and tests including the ROM oracle in `src/tests/`. Its hardware interface accepts complete scanlines instead of persistent drawable operations. Both versions retain line-by-line rendering, the three-picture gameplay cycle, and frame-boundary pacing.
 
 SDL2, `pkg-config`, and Rust are required. Normal execution uses compiled assets and does not read a cartridge file. The preserved assembly editions and analysis tools reside in `original/`.
 
@@ -48,4 +48,4 @@ Controls
 
 Both difficulty switches start at B; the display starts in color at 2x size. Window shortcuts restore 320×194, 640×388, or 960×582 pixels. Muting preserves game effects and oscillator phase. The right joystick uses Y/H/G/J and F; its movement also affects inactivity.
 
-The detailed contracts are in [SEMANTICS.md](SEMANTICS.md) and [refactored/SEMANTICS.md](refactored/SEMANTICS.md). The refactor's entry points are [game/lifecycle.rs](refactored/src/game/lifecycle.rs), [game/rendering.rs](refactored/src/game/rendering.rs), and [video.rs](refactored/src/video.rs).
+The detailed contracts are in [SEMANTICS.md](SEMANTICS.md) and [refactored/SEMANTICS.md](refactored/SEMANTICS.md). The refactor's game is in [adventure.rs](refactored/src/adventure.rs); its rasterizer is in [video.rs](refactored/src/video.rs).

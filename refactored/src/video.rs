@@ -160,4 +160,5 @@ fn solid(pixel: usize, x: u8, width: u8) -> bool {
 }
 
 #[cfg(test)]
+#[path = "tests/video.rs"]
 mod tests;

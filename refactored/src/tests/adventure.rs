@@ -1,17 +1,14 @@
-use super::Adventure;
-use super::assets::{
-    GRUNDLE_REACTIONS, OBJECT_CATALOG, RHINDLE_REACTIONS, ROOM_IDS, YORGLE_REACTIONS,
-};
-use super::model::{
-    Bitmap, DragonId, DragonState, Game, GateState, Gates, MovementPhase, ObjectId, Position,
-    RecordId, Room, SoundEffect,
+use super::{
+    Adventure, Bitmap, DragonId, DragonState, GRUNDLE_REACTIONS, Game, GateState, Gates,
+    MovementPhase, OBJECT_CATALOG, ObjectId, Position, RHINDLE_REACTIONS, ROOM_IDS, RecordId, Room,
+    SoundEffect, YORGLE_REACTIONS,
 };
 use crate::hardware::FrameHost;
 use crate::input::{Controls, Difficulty, Direction};
 use crate::sound::Sound;
 use crate::video::{Contacts, Frame, HEIGHT};
 
-#[path = "../reference/rom_oracle.rs"]
+#[path = "rom_oracle.rs"]
 mod oracle;
 use oracle::Cpu;
 
