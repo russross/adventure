@@ -67,7 +67,24 @@ run: rust-release
 rust-smoke:
 	$(MAKE) -C translation smoke
 
+# The shared trace library and independent cartridge validator own their checks.
+.PHONY: trace-check validator validator-check validate
+trace-check:
+	$(MAKE) -C trace check
+
+validator:
+	$(MAKE) -C validator all
+
+validator-check:
+	$(MAKE) -C validator check
+
+validate: validator
+	@test -n "$(TRACE)" || { echo 'Usage: make validate TRACE=playthrough.trace' >&2; exit 1; }
+	target/validator/release/adventure-validator "$(TRACE)"
+
 mostlyclean:
+	$(MAKE) -C trace mostlyclean
+	$(MAKE) -C validator mostlyclean
 	$(MAKE) -C translation mostlyclean
 	$(MAKE) -C refactored mostlyclean
 	rm -f build/adventure.lst build/adventure.sym build/control-flow.json build/control-flow.json.tmp build/data-labels.json
@@ -77,6 +94,8 @@ mostlyclean:
 	rm -f target/release/*.d target/.rustc_info.json target/rust-smoke.bmp target/rust-smoke.png
 
 clean: mostlyclean
+	$(MAKE) -C trace clean
+	$(MAKE) -C validator clean
 	$(MAKE) -C translation clean
 	rm -rf build target .tools
 

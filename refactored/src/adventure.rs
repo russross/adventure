@@ -4,6 +4,10 @@ use crate::hardware::FrameHost;
 use crate::input::{Controls, Difficulty, Direction};
 use crate::sound::Sound;
 use crate::video::{Appearance, ObjectLine, PlayfieldRow, Scanline, SpriteWidth, Video, WIDTH};
+use adventure_trace::{Control, Point, Session};
+use std::cell::RefCell;
+
+adventure_trace::port_adapter!(world, video);
 
 // World identities, records, and display state.
 
@@ -550,6 +554,7 @@ pub struct Adventure {
     pub video: Video,
     pub sound: Sound,
     pub controls: Controls,
+    pub trace: Option<RefCell<Session>>,
     display: PreparedDisplay,
     phase: PicturePhase,
 }
@@ -566,9 +571,19 @@ impl Adventure {
     // The entry keeps startup and the repeated game-turn sequence separate.
     pub fn run(&mut self, host: &mut impl FrameHost) -> Result<(), String> {
         if !self.power_on(host)? {
+            if let Some(trace) = &self.trace {
+                trace.borrow_mut().finish()?;
+            }
             return Ok(());
         }
-        while self.advance_picture(host)? {}
+        while self.advance_picture(host)? {
+            if let Some(trace) = &self.trace {
+                trace.borrow().check()?;
+            }
+        }
+        if let Some(trace) = &self.trace {
+            trace.borrow_mut().finish()?;
+        }
         Ok(())
     }
 
@@ -579,6 +594,13 @@ impl Adventure {
         self.video = Video::default();
         self.display = PreparedDisplay::default();
         self.sound = Sound::default();
+        if self
+            .trace
+            .as_ref()
+            .is_some_and(|trace| trace.borrow().stopped_at_boot())
+        {
+            return Ok(false);
+        }
         let Some(controls) = host.sample_controls()? else {
             return Ok(false);
         };
@@ -607,6 +629,7 @@ impl Adventure {
                 }
                 self.play_game_sound();
                 self.track_inactivity();
+                self.trace_checkpoint();
                 if self.world.won {
                     if !self.present_picture(host)? {
                         return Ok(false);
@@ -620,29 +643,45 @@ impl Adventure {
                     self.world.won = true;
                     self.world.sound_effect = SoundEffect::Victory;
                 }
+                self.trace_checkpoint();
 
                 // Player movement precedes presentation; pickup uses the newly drawn contacts.
                 self.move_player(MovementPhase::Both);
+                self.trace_checkpoint();
+                self.trace_at(Point::Held);
                 self.move_held_object();
+                self.trace_checkpoint();
                 if !self.present_picture(host)? {
                     return Ok(false);
                 }
                 self.prepare_room_display();
                 self.draw_room();
                 self.handle_pickup_and_drop();
+                self.trace_checkpoint();
                 self.phase = PicturePhase::BatAndGates;
             }
             PicturePhase::BatAndGates => {
                 self.move_player(MovementPhase::Vertical);
+                self.trace_checkpoint();
+                self.trace_at(Point::Light);
                 self.update_dark_room_light();
+                self.trace_checkpoint();
                 if !self.present_picture(host)? {
                     return Ok(false);
                 }
+                self.trace_at(Point::Bat);
                 self.update_bat();
+                self.trace_checkpoint();
+                self.trace_at(Point::Gates);
                 self.update_castle_gates();
+                self.trace_checkpoint();
                 self.draw_room();
+                self.trace_at(Point::Grundle);
                 self.update_grundle();
+                self.trace_checkpoint();
+                self.trace_at(Point::Yorgle);
                 self.update_yorgle();
+                self.trace_checkpoint();
                 self.phase = PicturePhase::RemainingActors;
             }
             PicturePhase::RemainingActors => {
@@ -650,8 +689,13 @@ impl Adventure {
                     return Ok(false);
                 }
                 self.move_player(MovementPhase::Horizontal);
+                self.trace_checkpoint();
+                self.trace_at(Point::Rhindle);
                 self.update_rhindle();
+                self.trace_checkpoint();
+                self.trace_at(Point::Magnet);
                 self.update_magnet();
+                self.trace_checkpoint();
                 self.draw_room();
                 self.phase = PicturePhase::Player;
             }
@@ -664,6 +708,9 @@ impl Adventure {
         match host.present(&self.video.frame, &self.sound)? {
             Some(controls) => {
                 self.controls = controls;
+                if let Some(trace) = &self.trace {
+                    trace.borrow_mut().next_frame();
+                }
                 Ok(true)
             }
             None => Ok(false),
@@ -672,6 +719,8 @@ impl Adventure {
 
     // Button edges preserve RESET's partial revival and SELECT's world reset.
     fn poll_console_switches(&mut self, host: &mut impl FrameHost) -> Result<bool, String> {
+        self.trace_at(Point::Console);
+        self.trace_input(Control::Reset);
         if self.controls.reset && !self.world.previous_reset {
             if self.world.won {
                 return self.initialize_world(host);
@@ -684,6 +733,7 @@ impl Adventure {
             self.world.sound_remaining = 0;
             self.world.held = ObjectId::Empty;
         }
+        self.trace_input(Control::Select);
         if self.controls.select && !self.world.previous_select {
             if self.world.player.room == Room::GameSelection {
                 self.world.game = self.world.game.next();
@@ -691,11 +741,13 @@ impl Adventure {
             return self.initialize_world(host);
         }
         self.remember_console_switches();
+        self.trace_checkpoint();
         Ok(true)
     }
 
     // Place the selected game's actors and items; display caches and counters remain live.
     pub fn initialize_world(&mut self, host: &mut impl FrameHost) -> Result<bool, String> {
+        self.trace_initialize();
         self.world.player.room = Room::GameSelection;
         self.world.safe_player.room = Room::GameSelection;
         self.world.player.y = 0;
@@ -757,8 +809,10 @@ impl Adventure {
             down: true,
         };
 
+        self.trace_checkpoint();
         if self.world.game == Game::Three {
             self.randomize_game_three();
+            self.trace_checkpoint();
             if !self.present_picture(host)? {
                 return Ok(false);
             }
@@ -767,11 +821,15 @@ impl Adventure {
         self.world.won = false;
         self.world.held = ObjectId::Empty;
         self.remember_console_switches();
+        self.trace_checkpoint();
         Ok(true)
     }
 
     // The shared console-poll tail needs no stack or shared pointer state.
     fn remember_console_switches(&mut self) {
+        self.trace_at(Point::History);
+        self.trace_input(Control::Reset);
+        self.trace_input(Control::Select);
         self.world.previous_reset = self.controls.reset;
         self.world.previous_select = self.controls.select;
     }
@@ -814,6 +872,13 @@ impl Adventure {
 
     // The counter also supplies dynamic colors and Game 3's placement seed.
     fn track_inactivity(&mut self) {
+        self.trace_at(Point::Inactivity);
+        self.trace_input(Control::LeftDirection);
+        self.trace_input(Control::RightDirection);
+        if self.controls.left.direction.is_idle() && self.controls.right.direction.is_idle() {
+            self.trace_input(Control::Reset);
+            self.trace_input(Control::Select);
+        }
         self.world.idle_ticks = self.world.idle_ticks.wrapping_add(1);
         if self.world.idle_ticks == 0 {
             self.world.idle_periods = self.world.idle_periods.wrapping_add(1);
@@ -836,12 +901,12 @@ impl Adventure {
 impl Adventure {
     // Roll back blocked movement except within the bridge's traversable corridor.
     fn move_player(&mut self, phase: MovementPhase) {
-        let contacts = self.video.contacts;
-        let blocked = contacts.player_walls
-            || contacts.player_barriers[0]
-            || contacts.player_barriers[1] && self.world.second_visible != ObjectId::Dot
-            || contacts.player_objects[0] && self.world.first_visible != ObjectId::Light
-            || contacts.player_objects[1] && self.world.second_visible != ObjectId::Light;
+        self.trace_at(match phase {
+            MovementPhase::Both => Point::PlayerBoth,
+            MovementPhase::Vertical => Point::PlayerVertical,
+            MovementPhase::Horizontal => Point::PlayerHorizontal,
+        });
+        let blocked = self.trace_blocked();
         let bridge_x = self.world.player.x.wrapping_sub(self.world.bridge.x);
         let bridge_y = self.world.bridge.y.wrapping_sub(self.world.player.y);
         let crossing_bridge = phase == MovementPhase::Horizontal
@@ -854,6 +919,7 @@ impl Adventure {
             self.world.safe_player = self.world.player;
         }
         if phase == MovementPhase::Both {
+            self.trace_input(Control::LeftDirection);
             self.world.joystick_direction = self.controls.left.direction;
         }
         self.world.player = self.world.safe_player;
@@ -879,6 +945,7 @@ impl Adventure {
             }
             *self.world.position_mut(record) = Position::new(outside, 80, 44);
             self.world.gates.set(gate, GateState::Open);
+            self.trace_transition(record);
             return;
         }
         let mut position = self.world.position(record);
@@ -899,6 +966,7 @@ impl Adventure {
                 position.room = Room::RobinettCredits;
                 position.x = 3;
                 *self.world.position_mut(record) = position;
+                self.trace_transition(record);
                 return;
             }
             position.x = 3;
@@ -912,6 +980,7 @@ impl Adventure {
         };
         position.room = self.room_exit(position.room, exit);
         *self.world.position_mut(record) = position;
+        self.trace_transition(record);
     }
 
     // Each independent direction modifies a byte coordinate with wrapping arithmetic.
@@ -1083,16 +1152,19 @@ impl Adventure {
 impl Adventure {
     // Fire drops an item; the last rendered contacts determine pickup candidates.
     fn handle_pickup_and_drop(&mut self) {
+        self.trace_at(Point::Pickup);
+        self.trace_input(Control::Fire);
         let newly_pressed = self.controls.left.fire && !self.world.fire_was_pressed;
         self.world.fire_was_pressed = self.controls.left.fire;
         if newly_pressed && self.world.held != ObjectId::Empty {
             self.world.held = ObjectId::Empty;
             self.world.sound_effect = SoundEffect::Drop;
             self.world.sound_remaining = 4;
+            self.trace_checkpoint();
         }
-        let touched = if self.video.contacts.player_objects[0] {
+        let touched = if self.trace_player_slot(0) {
             self.world.first_visible
-        } else if self.video.contacts.player_objects[1] {
+        } else if self.trace_player_slot(1) {
             self.world.second_visible
         } else {
             return;
@@ -1145,9 +1217,9 @@ impl Adventure {
     // Only the displayed slots can report player contact.
     fn is_touching_player(&self, object: ObjectId) -> bool {
         if object == self.world.first_visible {
-            self.video.contacts.player_objects[0]
+            self.trace_player_slot(0)
         } else if object == self.world.second_visible {
-            self.video.contacts.player_objects[1]
+            self.trace_player_slot(1)
         } else {
             false
         }
@@ -1155,6 +1227,7 @@ impl Adventure {
 
     // Return the other member of a displayed object pair that touched.
     fn find_touching_object(&self, object: ObjectId) -> ObjectId {
+        self.trace_object_contact();
         if !self.video.contacts.objects_touch {
             return ObjectId::Empty;
         }
@@ -1313,6 +1386,7 @@ impl Adventure {
         let object = dragon.object();
         match self.world.dragon(dragon).state {
             DragonState::Wandering => {
+                self.trace_input(Control::RightDifficulty);
                 let speed = match dragon {
                     DragonId::Rhindle => 3,
                     DragonId::Yorgle | DragonId::Grundle => 2,
@@ -1321,6 +1395,7 @@ impl Adventure {
                 self.world.dragon_mut(dragon).direction = direction;
                 self.move_object_through_world(dragon.record(), direction, speed);
                 if self.is_touching_player(object) {
+                    self.trace_input(Control::LeftDifficulty);
                     let delay = match (self.world.game, self.controls.left_difficulty) {
                         (Game::One, Difficulty::B) => 0xd0,
                         (Game::One, Difficulty::A) => 0xe8,
@@ -1415,6 +1490,9 @@ impl Adventure {
         if let Some(cargo) = self.world.bat.carried {
             let bat = self.world.bat.position;
             *self.world.position_mut(cargo) = Position::new(bat.room, bat.x.wrapping_add(8), bat.y);
+            if self.trace_crossed(RecordId::Bat) {
+                self.trace_transition(cargo);
+            }
             if self.world.held.record() == Some(cargo) {
                 self.world.held = ObjectId::Empty;
             }
@@ -1504,6 +1582,8 @@ impl Adventure {
 
     // Appearance and images are a snapshot, reused by the following two pictures.
     fn prepare_room_display(&mut self) {
+        self.trace_at(Point::Display);
+        self.trace_input(Control::Color);
         let (walls, appearance) = self.room_appearance(self.world.player.room);
         self.display.room_walls = walls;
         self.display.appearance = appearance;

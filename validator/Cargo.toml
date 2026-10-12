@@ -1,0 +1,10 @@
+[package]
+name = "adventure-validator"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+adventure-trace = { path = "../trace" }
+
+[dev-dependencies]
+adventure-port = { path = "../translation" }

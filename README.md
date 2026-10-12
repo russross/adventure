@@ -30,6 +30,30 @@ For a bounded run or BMP capture:
 `make run`, `make rust-check`, and `make rust-smoke` build, check, and exercise the translation through its own Makefile. Both versions use calibrated object placement checked against an independent Stella capture. The root assembly and analysis targets still refer to the layout before those sources moved into `original/`.
 
 
+Record and validate a playthrough
+--------------------------------
+
+Run these commands from the project root. Choose either version to record:
+
+    make run ARGS='--record playthrough.trace'
+    make refactored-run ARGS='--record playthrough.trace'
+
+Press Enter to start, play through to victory, then press Escape to finish the recording. The trace begins at boot and includes game selection, resets, consumed inputs, object changes, and observed collisions. Recording writes to the named file during play and flushes the final `end` record on normal exit. Use a different filename for each run; recording replaces an existing file.
+
+Validate the completed trace against the original machine-language cartridge:
+
+    make validate TRACE=playthrough.trace
+
+This builds the headless validator, verifies the assembled cartridge's SHA-256, then executes its original instruction stream with the recorded inputs. The validator computes its own collision latches and compares its normalized game events with the trace. It opens no window and runs without frame pacing. Success prints `ROM verified N frames`; a mismatch reports the first expected and observed event with the CPU location and exits unsuccessfully.
+
+To replay and verify the same trace against either Rust version without opening a window:
+
+    make run ARGS='--replay playthrough.trace'
+    make refactored-run ARGS='--replay playthrough.trace'
+
+`make trace-check` checks the shared format and state machine. `make validator-check` checks ROM execution against generated translation traces. The format and observation contract are documented in [trace/SEMANTICS.md](trace/SEMANTICS.md).
+
+
 Controls
 --------
 

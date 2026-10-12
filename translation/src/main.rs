@@ -1,16 +1,23 @@
+use std::cell::RefCell;
 use std::env;
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process;
 
 use adventure_port::adventure::Adventure;
 use adventure_port::hardware::SdlHardware;
+use adventure_port::replay::ReplayHost;
+use adventure_trace::{Record, Session};
 
 #[derive(Default)]
 struct Options {
     frames: Option<NonZeroUsize>,
     unpaced: bool,
     snapshot: Option<PathBuf>,
+    record: Option<PathBuf>,
+    replay: Option<PathBuf>,
 }
 
 // Share the compact keyboard reference between normal startup and command help.
@@ -44,13 +51,25 @@ fn execute() -> Result<(), String> {
                 );
             }
             "--unpaced" => options.unpaced = true,
+            "--record" => {
+                options.record = Some(PathBuf::from(
+                    args.next().ok_or("--record needs a trace path")?,
+                ))
+            }
+            "--replay" => {
+                options.replay = Some(PathBuf::from(
+                    args.next().ok_or("--replay needs a trace path")?,
+                ))
+            }
             "--snapshot" => {
                 options.snapshot = Some(PathBuf::from(
                     args.next().ok_or("--snapshot needs a BMP path")?,
                 ))
             }
             "--help" | "-h" => {
-                println!("Usage: adventure [--frames N] [--unpaced] [--snapshot FILE.bmp]");
+                println!(
+                    "Usage: adventure [--frames N] [--unpaced] [--snapshot FILE.bmp] [--record FILE]\n       adventure --replay FILE"
+                );
                 print_controls();
                 return Ok(());
             }
@@ -58,10 +77,43 @@ fn execute() -> Result<(), String> {
         }
     }
 
+    // Replay uses virtual frame boundaries and supplies only inputs, checking all resulting records.
+    if let Some(path) = options.replay {
+        if options.record.is_some()
+            || options.snapshot.is_some()
+            || options.frames.is_some()
+            || options.unpaced
+        {
+            return Err("--replay cannot be combined with live-play options".into());
+        }
+        let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let records: Vec<Record> = BufReader::new(file)
+            .lines()
+            .enumerate()
+            .map(|(index, line)| {
+                line.map_err(|e| e.to_string())?
+                    .parse()
+                    .map_err(|e| format!("{}:{}: {e}", path.display(), index + 1))
+            })
+            .collect::<Result<_, String>>()?;
+        let frames = records.last().ok_or("empty trace")?.at.frame;
+        let mut game = Adventure {
+            trace: Some(RefCell::new(Session::replay(records)?)),
+            ..Adventure::default()
+        };
+        game.cartridge_entry(&mut ReplayHost::new(frames))?;
+        println!("Verified {frames} frames");
+        return Ok(());
+    }
+
     // SDL owns presentation and input; the port owns game state and the original call order.
     let mut hardware = SdlHardware::new(!options.unpaced, options.frames.map(NonZeroUsize::get))?;
     print_controls();
     let mut game = Adventure::default();
+    if let Some(path) = options.record {
+        let file = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        game.trace = Some(RefCell::new(Session::record_to(BufWriter::new(file))?));
+    }
     game.cartridge_entry(&mut hardware)?;
     if let Some(path) = options.snapshot {
         hardware.save_snapshot(&path)?;

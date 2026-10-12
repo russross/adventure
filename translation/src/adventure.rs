@@ -4,6 +4,10 @@ use crate::hardware::FrameHost;
 use crate::input::{Controls, Difficulty, Direction};
 use crate::sound::Sound;
 use crate::tia::{Drawable, PlayfieldRow, SpriteStyle, Tia};
+use adventure_trace::{Control, Point, Session};
+use std::cell::RefCell;
+
+adventure_trace::port_adapter!(ram, tia);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
@@ -583,15 +587,26 @@ pub struct Adventure {
     pub tia: Tia,
     pub sound: Sound,
     pub controls: Controls,
+    pub trace: Option<RefCell<Session>>,
 }
 
 impl Adventure {
     // $F000: The entry keeps startup and the repeated game-turn sequence separate.
     pub fn cartridge_entry(&mut self, host: &mut impl FrameHost) -> Result<(), String> {
         if !self.power_on(host)? {
+            if let Some(trace) = &self.trace {
+                trace.borrow_mut().finish()?;
+            }
             return Ok(());
         }
-        while self.run_game(host)? {}
+        while self.run_game(host)? {
+            if let Some(trace) = &self.trace {
+                trace.borrow().check()?;
+            }
+        }
+        if let Some(trace) = &self.trace {
+            trace.borrow_mut().finish()?;
+        }
         Ok(())
     }
 
@@ -667,6 +682,9 @@ impl Adventure {
         match host.vertical_sync(&self.tia.frame, &self.sound)? {
             Some(controls) => {
                 self.controls = controls;
+                if let Some(trace) = &self.trace {
+                    trace.borrow_mut().next_frame();
+                }
                 Ok(true)
             }
             None => Ok(false),
@@ -675,6 +693,8 @@ impl Adventure {
 
     // $F10F: Read the room, choose its appearance, select objects, then prepare each slot.
     fn prepare_room_display(&mut self) {
+        self.trace_at(Point::Display);
+        self.trace_input(Control::Color);
         let room = self.find_room_record(self.ram.player.room);
         self.ram.display.room_walls = room.walls;
         let color = if self.controls.color {
@@ -778,6 +798,13 @@ impl Adventure {
 
     // $F2B2: The counter also supplies dynamic colors and Game 3's placement seed.
     fn track_inactivity(&mut self) {
+        self.trace_at(Point::Inactivity);
+        self.trace_input(Control::LeftDirection);
+        self.trace_input(Control::RightDirection);
+        if self.controls.left.direction.is_idle() && self.controls.right.direction.is_idle() {
+            self.trace_input(Control::Reset);
+            self.trace_input(Control::Select);
+        }
         self.ram.idle_ticks = self.ram.idle_ticks.wrapping_add(1);
         if self.ram.idle_ticks == 0 {
             self.ram.idle_periods = self.ram.idle_periods.wrapping_add(1);
@@ -820,6 +847,13 @@ impl Adventure {
         self.tia = Tia::default();
         self.sound = Sound::default();
         self.position_side_barriers();
+        if self
+            .trace
+            .as_ref()
+            .is_some_and(|trace| trace.borrow().stopped_at_boot())
+        {
+            return Ok(false);
+        }
         let Some(controls) = host.sample_controls()? else {
             return Ok(false);
         };
@@ -834,41 +868,63 @@ impl Adventure {
         }
         self.play_game_sound();
         self.track_inactivity();
+        self.trace_checkpoint();
         if !self.ram.won {
             if self.ram.chalice.room == Room::GoldTreasury {
                 self.ram.sound_remaining = 255;
                 self.ram.won = true;
                 self.ram.sound_effect = SoundEffect::Victory;
             }
+            self.trace_checkpoint();
 
             // First picture finishes with contact handling after drawing.
             self.move_player(MovementPhase::Both);
+            self.trace_checkpoint();
+            self.trace_at(Point::Held);
             self.move_held_object();
+            self.trace_checkpoint();
             if !self.begin_frame(host)? {
                 return Ok(false);
             }
             self.prepare_room_display();
             self.draw_room();
             self.handle_pickup_and_drop();
+            self.trace_checkpoint();
 
             // The following calls retain their position around the second frame boundary.
             self.move_player(MovementPhase::Vertical);
+            self.trace_checkpoint();
+            self.trace_at(Point::Light);
             self.update_dark_room_light();
+            self.trace_checkpoint();
             if !self.begin_frame(host)? {
                 return Ok(false);
             }
+            self.trace_at(Point::Bat);
             self.update_bat();
+            self.trace_checkpoint();
+            self.trace_at(Point::Gates);
             self.update_castle_gates();
+            self.trace_checkpoint();
             self.draw_room();
+            self.trace_at(Point::Grundle);
             self.update_grundle();
+            self.trace_checkpoint();
+            self.trace_at(Point::Yorgle);
             self.update_yorgle();
+            self.trace_checkpoint();
 
             if !self.begin_frame(host)? {
                 return Ok(false);
             }
             self.move_player(MovementPhase::Horizontal);
+            self.trace_checkpoint();
+            self.trace_at(Point::Rhindle);
             self.update_rhindle();
+            self.trace_checkpoint();
+            self.trace_at(Point::Magnet);
             self.update_magnet();
+            self.trace_checkpoint();
             self.draw_room();
         } else {
             // Victory uses the shared picture state, then refreshes its appearance.
@@ -889,6 +945,8 @@ impl Adventure {
 
     // $F384: Button edges preserve RESET's partial revival and SELECT's world reset.
     fn poll_console_switches(&mut self, host: &mut impl FrameHost) -> Result<bool, String> {
+        self.trace_at(Point::Console);
+        self.trace_input(Control::Reset);
         if self.controls.reset && !self.ram.previous_reset {
             if self.ram.won {
                 return self.initialize_world(host);
@@ -901,6 +959,7 @@ impl Adventure {
             self.ram.sound_remaining = 0;
             self.ram.held = ObjectId::Empty;
         }
+        self.trace_input(Control::Select);
         if self.controls.select && !self.ram.previous_select {
             if self.ram.player.room == Room::GameSelection {
                 self.ram.game = self.ram.game.next();
@@ -908,11 +967,13 @@ impl Adventure {
             return self.initialize_world(host);
         }
         self.remember_console_switches();
+        self.trace_checkpoint();
         Ok(true)
     }
 
     // $F3D3: Only the copied world fields are reset; display caches and counters remain live.
     pub fn initialize_world(&mut self, host: &mut impl FrameHost) -> Result<bool, String> {
+        self.trace_initialize();
         self.ram.player.room = Room::GameSelection;
         self.ram.safe_player.room = Room::GameSelection;
         self.ram.player.y = 0;
@@ -931,9 +992,11 @@ impl Adventure {
         self.ram.black_key = world.black_key;
         self.ram.gates = world.gates;
         self.ram.bat = world.bat;
+        self.trace_checkpoint();
 
         if self.ram.game == Game::Three {
             self.randomize_game_three();
+            self.trace_checkpoint();
             if !self.begin_frame(host)? {
                 return Ok(false);
             }
@@ -942,11 +1005,15 @@ impl Adventure {
         self.ram.won = false;
         self.ram.held = ObjectId::Empty;
         self.remember_console_switches();
+        self.trace_checkpoint();
         Ok(true)
     }
 
     // $F40C: The shared console-poll tail needs no stack or shared pointer state.
     fn remember_console_switches(&mut self) {
+        self.trace_at(Point::History);
+        self.trace_input(Control::Reset);
+        self.trace_input(Control::Select);
         self.ram.previous_reset = self.controls.reset;
         self.ram.previous_select = self.controls.select;
     }
@@ -1150,12 +1217,12 @@ const GAME_TWO_WORLD: StartingWorld = StartingWorld {
 impl Adventure {
     // $F4C2: Roll back blocked movement except within the bridge's traversable corridor.
     fn move_player(&mut self, phase: MovementPhase) {
-        let contacts = self.tia.contacts;
-        let blocked = contacts.player_walls
-            || contacts.player_barriers[0]
-            || contacts.player_barriers[1] && self.ram.second_visible != ObjectId::Dot
-            || contacts.player_objects[0] && self.ram.first_visible != ObjectId::Light
-            || contacts.player_objects[1] && self.ram.second_visible != ObjectId::Light;
+        self.trace_at(match phase {
+            MovementPhase::Both => Point::PlayerBoth,
+            MovementPhase::Vertical => Point::PlayerVertical,
+            MovementPhase::Horizontal => Point::PlayerHorizontal,
+        });
+        let blocked = self.trace_blocked();
         let bridge_x = self.ram.player.x.wrapping_sub(self.ram.bridge.x);
         let bridge_y = self.ram.bridge.y.wrapping_sub(self.ram.player.y);
         let crossing_bridge = phase == MovementPhase::Horizontal
@@ -1168,6 +1235,7 @@ impl Adventure {
             self.ram.safe_player = self.ram.player;
         }
         if phase == MovementPhase::Both {
+            self.trace_input(Control::LeftDirection);
             self.ram.joystick_direction = self.controls.left.direction;
         }
         self.ram.player = self.ram.safe_player;
@@ -1181,16 +1249,19 @@ impl Adventure {
 
     // $F556: Fire drops an item; the last rendered contacts determine pickup candidates.
     fn handle_pickup_and_drop(&mut self) {
+        self.trace_at(Point::Pickup);
+        self.trace_input(Control::Fire);
         let newly_pressed = self.controls.left.fire && !self.ram.fire_was_pressed;
         self.ram.fire_was_pressed = self.controls.left.fire;
         if newly_pressed && self.ram.held != ObjectId::Empty {
             self.ram.held = ObjectId::Empty;
             self.ram.sound_effect = SoundEffect::Drop;
             self.ram.sound_remaining = 4;
+            self.trace_checkpoint();
         }
-        let touched = if self.tia.contacts.player_objects[0] {
+        let touched = if self.trace_player_slot(0) {
             self.ram.first_visible
-        } else if self.tia.contacts.player_objects[1] {
+        } else if self.trace_player_slot(1) {
             self.ram.second_visible
         } else {
             return;
@@ -1245,6 +1316,7 @@ impl Adventure {
             }
             *self.ram.position_mut(record) = Position::new(CASTLE_OUTSIDES[gate.index()], 80, 44);
             self.ram.gates.set(gate, GateState::Open);
+            self.trace_transition(record);
             return;
         }
         let mut position = self.ram.position(record);
@@ -1265,6 +1337,7 @@ impl Adventure {
                 position.room = Room::RobinettCredits;
                 position.x = 3;
                 *self.ram.position_mut(record) = position;
+                self.trace_transition(record);
                 return;
             }
             position.x = 3;
@@ -1279,6 +1352,7 @@ impl Adventure {
         let destination = self.find_room_record(position.room).exits[exit];
         position.room = self.resolve_game_exit(destination);
         *self.ram.position_mut(record) = position;
+        self.trace_transition(record);
     }
 
     // $F6AC: Each independent direction modifies a byte coordinate with wrapping arithmetic.
@@ -1311,9 +1385,9 @@ impl Adventure {
     // $F6E9: Only the displayed slots can report player contact.
     fn is_touching_player(&self, object: ObjectId) -> bool {
         if object == self.ram.first_visible {
-            self.tia.contacts.player_objects[0]
+            self.trace_player_slot(0)
         } else if object == self.ram.second_visible {
-            self.tia.contacts.player_objects[1]
+            self.trace_player_slot(1)
         } else {
             false
         }
@@ -1321,6 +1395,7 @@ impl Adventure {
 
     // $F6FE: Return the other member of a displayed object pair that touched.
     fn find_touching_object(&self, object: ObjectId) -> ObjectId {
+        self.trace_object_contact();
         if !self.tia.contacts.objects_touch {
             return ObjectId::Empty;
         }
@@ -1485,6 +1560,7 @@ impl Adventure {
         let object = dragon.object();
         match self.ram.dragon(dragon).state {
             DragonState::Wandering => {
+                self.trace_input(Control::RightDifficulty);
                 let ignored = if self.controls.right_difficulty == Difficulty::B {
                     Some(RecordId::Sword)
                 } else {
@@ -1492,6 +1568,7 @@ impl Adventure {
                 };
                 self.move_creature(Creature::Dragon(dragon), reactions, ignored, speed);
                 if self.is_touching_player(object) {
+                    self.trace_input(Control::LeftDifficulty);
                     let difficulty = usize::from(self.controls.left_difficulty == Difficulty::A);
                     self.ram.dragon_mut(dragon).state =
                         DragonState::Biting(DRAGON_BITE_DELAYS[self.ram.game.index()][difficulty]);
@@ -1563,6 +1640,9 @@ impl Adventure {
         if let Some(cargo) = self.ram.bat.carried {
             let bat = self.ram.bat.position;
             *self.ram.position_mut(cargo) = Position::new(bat.room, bat.x.wrapping_add(8), bat.y);
+            if self.trace_crossed(RecordId::Bat) {
+                self.trace_transition(cargo);
+            }
             if OBJECT_CATALOG[self.ram.held as usize].position_matches(cargo) {
                 self.ram.held = ObjectId::Empty;
             }

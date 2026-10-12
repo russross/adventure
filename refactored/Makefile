@@ -1,7 +1,7 @@
 # Cargo tracks Rust source dependencies; DASM produces only the test reference fixture.
 .NOTPARALLEL:
 .DELETE_ON_ERROR:
-.PHONY: all release run fmt lint check smoke mostlyclean clean
+.PHONY: all release run format fmt lint check smoke mostlyclean clean
 CARGO ?= cargo
 export CARGO_TARGET_DIR := $(abspath ../target/refactored)
 
@@ -26,6 +26,9 @@ run: release
 	../.tools/dasm ../original/adventure.asm -f3 -o$@
 	printf '%s  %s\n' b0326b45e5cab066b2d03f1e683708d82de3ffe60b2e968bf88c5494237f0a96 $@ | sha256sum -c -
 
+format:
+	$(CARGO) fmt
+
 fmt:
 	$(CARGO) fmt --check
 
@@ -33,7 +36,7 @@ lint: fmt Cargo.lock ../target/refactored-oracle.bin
 	$(CARGO) clippy --locked --all-targets -- -D warnings
 
 check: lint
-	$(CARGO) test --locked
+	$(CARGO) test --locked $(TEST_ARGS)
 
 smoke: Cargo.lock
 	$(CARGO) run --locked --bin sdl_smoke

@@ -71,3 +71,9 @@ Checks run formatting, Clippy with warnings as errors, then tests. The Makefile 
 Long trajectory tests compare exact presented pixels, line counts, audio controls, final contacts, and all public persistent records against `translation/`, with 400 turns for each of three games and three input seeds, including forced victory and subsequent switches. Boundary termination tests stop after different accepted frame counts. The headed SDL smoke runner starts play, retrieves the Gold Key, verifies pickup audio, mute/repeat behavior, and window sizes, writes `target/refactored-smoke.bmp`, and closes after 105 presentations.
 
 `mostlyclean` removes refactor intermediates and test captures while preserving the release executable. `clean` also removes its deployment executable. Neither target changes source, configuration, saved data, or the preserved translation.
+
+
+Trace observation
+-----------------
+
+An optional trace session records the same semantic operation boundaries and consumed inputs as the translation. `--record FILE` writes a boot-to-exit recording; `--replay FILE` uses a headless host and verifies independently generated records. The observation adapter is shared through `adventure-trace`, while world updates and collision composition remain independent. Translation traces are also validated against the refactor in integration tests. The complete format and equivalence contract are in [trace/SEMANTICS.md](../trace/SEMANTICS.md).

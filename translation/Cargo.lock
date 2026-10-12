@@ -6,8 +6,13 @@ version = 4
 name = "adventure-port"
 version = "0.1.0"
 dependencies = [
+ "adventure-trace",
  "sdl2",
 ]
+
+[[package]]
+name = "adventure-trace"
+version = "0.1.0"
 
 [[package]]
 name = "bitflags"

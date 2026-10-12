@@ -6,6 +6,7 @@ version = 4
 name = "adventure-port"
 version = "0.1.0"
 dependencies = [
+ "adventure-trace",
  "sdl2",
 ]
 
@@ -14,8 +15,13 @@ name = "adventure-refactored"
 version = "0.1.0"
 dependencies = [
  "adventure-port",
+ "adventure-trace",
  "sdl2",
 ]
+
+[[package]]
+name = "adventure-trace"
+version = "0.1.0"
 
 [[package]]
 name = "bitflags"

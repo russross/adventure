@@ -9,5 +9,6 @@ name = "adventure"
 path = "src/main.rs"
 
 [dependencies]
+adventure-trace = { path = "../trace" }
 sdl2 = { version = "0.38", features = ["use-pkgconfig"] }
 

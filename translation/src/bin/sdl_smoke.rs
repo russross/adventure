@@ -1,5 +1,8 @@
 //! Drive real SDL events through a short play session, then save the presented picture.
 
+use std::cell::RefCell;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::process;
@@ -7,8 +10,10 @@ use std::process;
 use adventure_port::adventure::{Adventure, ObjectId, Room};
 use adventure_port::hardware::{FrameHost, SdlHardware};
 use adventure_port::input::Controls;
+use adventure_port::replay::ReplayHost;
 use adventure_port::sound::{Sound, Synthesizer};
 use adventure_port::tia::Frame;
+use adventure_trace::Session as TraceSession;
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Mod};
 
@@ -101,8 +106,29 @@ fn execute() -> Result<(), String> {
         synthesizer: Synthesizer::new(NonZeroU32::new(48_000).unwrap()),
         audible_samples: 0,
     };
-    let mut game = Adventure::default();
+    let mut game = Adventure {
+        trace: Some(RefCell::new(TraceSession::record())),
+        ..Adventure::default()
+    };
     game.cartridge_entry(&mut session)?;
+    let records = game
+        .trace
+        .as_ref()
+        .ok_or("missing recording")?
+        .borrow()
+        .records()
+        .to_vec();
+    let mut writer =
+        BufWriter::new(File::create("target/rust-smoke.trace").map_err(|e| e.to_string())?);
+    for record in &records {
+        writeln!(writer, "{record}").map_err(|e| e.to_string())?;
+    }
+    writer.flush().map_err(|e| e.to_string())?;
+    let mut replay = Adventure {
+        trace: Some(RefCell::new(TraceSession::replay(records)?)),
+        ..Adventure::default()
+    };
+    replay.cartridge_entry(&mut ReplayHost::new(105))?;
     session
         .display
         .save_snapshot(Path::new("target/rust-smoke.bmp"))?;
