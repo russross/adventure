@@ -6,24 +6,14 @@ use crate::sound::Sound;
 use crate::video::{
     Appearance, HEIGHT, Object, ObjectLine, Picture, PlayfieldRow, SpriteWidth, Video, WIDTH,
 };
+use Exit::{ByGame, Fixed};
 use adventure_trace::{Point, Session};
 use std::cell::RefCell;
 
-#[path = "adventure/artwork.rs"]
-mod artwork;
-#[path = "adventure/controls.rs"]
+#[path = "controls.rs"]
 mod controls;
-#[path = "adventure/observation.rs"]
+#[path = "observation.rs"]
 mod observation;
-#[path = "adventure/rooms.rs"]
-mod rooms;
-
-use artwork::{
-    BAT_FRAME_ONE, BAT_FRAME_TWO, BRIDGE_IMAGE, CHALICE_IMAGE, DOT_IMAGE, DRAGON_BITING_IMAGE,
-    DRAGON_DEAD_IMAGE, DRAGON_WALKING_IMAGE, EMPTY_IMAGE, GAME_ONE_IMAGE, GAME_THREE_IMAGE,
-    GAME_TWO_IMAGE, GATE_IMAGE, KEY_IMAGE, LIGHT_IMAGE, MAGNET_IMAGE, ROBINETT_CREDITS_IMAGE,
-    SWORD_IMAGE, WALLS_ENCLOSED_ROOM,
-};
 
 // World identities, records, and display state.
 
@@ -1817,6 +1807,840 @@ const ROOM_IDS: [Room; 31] = [
     Room::PurpleChamber,
     Room::RedHall,
     Room::RobinettCredits,
+];
+
+// Room definitions.
+
+#[derive(Clone, Copy)]
+enum Exit {
+    Fixed(Room),
+    ByGame { first: Room, later: Room },
+}
+
+impl Exit {
+    fn destination(self, game: Game) -> Room {
+        match self {
+            Self::Fixed(room) => room,
+            Self::ByGame { first, later } => match game {
+                Game::One => first,
+                Game::Two | Game::Three => later,
+            },
+        }
+    }
+}
+
+// Named fields keep the map readable without depending on directional indices.
+struct Exits {
+    north: Exit,
+    east: Exit,
+    south: Exit,
+    west: Exit,
+}
+
+impl Exits {
+    fn new(north: Exit, east: Exit, south: Exit, west: Exit) -> Self {
+        Self {
+            north,
+            east,
+            south,
+            west,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Features {
+    dark: bool,
+    mirrored: bool,
+    barriers: [bool; 2],
+}
+
+// Dark rooms use foreground priority as well as the player's light.
+const ORDINARY: Features = Features {
+    dark: false,
+    mirrored: true,
+    barriers: [false; 2],
+};
+const DARK: Features = Features {
+    dark: true,
+    ..ORDINARY
+};
+const DARK_REPEATED: Features = Features {
+    mirrored: false,
+    ..DARK
+};
+const LEFT_BARRIER: Features = Features {
+    barriers: [true, false],
+    ..ORDINARY
+};
+const RIGHT_BARRIER: Features = Features {
+    barriers: [false, true],
+    ..ORDINARY
+};
+
+struct RoomDefinition {
+    exits: Exits,
+    walls: &'static [PlayfieldRow; 7],
+    color: u8,
+    monochrome: u8,
+    features: Features,
+}
+
+impl RoomDefinition {
+    fn exit(&self, edge: RoomEdge, game: Game) -> Room {
+        match edge {
+            RoomEdge::North => self.exits.north,
+            RoomEdge::East => self.exits.east,
+            RoomEdge::South => self.exits.south,
+            RoomEdge::West => self.exits.west,
+        }
+        .destination(game)
+    }
+}
+
+impl Room {
+    // Each definition describes ordinary exits. Castle openings and secret entry are movement rules.
+    #[rustfmt::skip]
+    fn definition(self) -> RoomDefinition {
+        let (exits, walls, color, monochrome, features) = match self {
+            Self::GameSelection | Self::GoldTreasury => (
+                Exits::new(Fixed(self), Fixed(self), Fixed(self), Fixed(self)),
+                &WALLS_ENCLOSED_ROOM, if self == Self::GoldTreasury { 0x1a } else { 0x66 }, 0x0a, ORDINARY,
+            ),
+            Self::WestHall => (
+                Exits::new(Fixed(Self::BlueMazeEntrance), Fixed(Self::BelowGoldCastle), ByGame { first: Self::BlackCastle, later: Self::WhiteCastle }, Fixed(Self::SecretPassage)),
+                &WALLS_OPEN_HALL, 0xd8, 0x0a, LEFT_BARRIER,
+            ),
+            Self::BelowGoldCastle => (
+                Exits::new(Fixed(Self::GoldCastle), Fixed(Self::SecretPassage), ByGame { first: Self::BlueMaze05, later: Self::GoldCastle }, Fixed(Self::WestHall)),
+                &WALLS_OPEN_HALL, 0xc8, 0x0a, ORDINARY,
+            ),
+            Self::SecretPassage => (
+                Exits::new(Fixed(Self::BlueMazeSouth), Fixed(Self::WestHall), ByGame { first: Self::RedHall, later: Self::CatacombsEntrance }, Fixed(Self::BelowGoldCastle)),
+                &WALLS_SECRET_PASSAGE, 0xe8, 0x0a, RIGHT_BARRIER,
+            ),
+
+            // The blue maze joins the outdoor halls and the Black Castle facade.
+            Self::BlueMazeNorth => (
+                Exits::new(Fixed(Self::BlackCastle), Fixed(Self::BlueMaze05), Fixed(Self::BlueMazeCenter), Fixed(Self::BlueMazeSouth)),
+                &WALLS_BLUE_MAZE_NORTH, 0x86, 0x0a, ORDINARY,
+            ),
+            Self::BlueMaze05 => (
+                Exits::new(Fixed(Self::RedHall), Fixed(Self::BlueMazeSouth), Fixed(Self::BlueMazeEntrance), Fixed(Self::BlueMazeNorth)),
+                &WALLS_BLUE_MAZE_05, 0x86, 0x0a, ORDINARY,
+            ),
+            Self::BlueMazeSouth => (
+                Exits::new(Fixed(Self::BlueMazeCenter), Fixed(Self::BlueMazeNorth), Fixed(Self::SecretPassage), Fixed(Self::BlueMaze05)),
+                &WALLS_BLUE_MAZE_SOUTH, 0x86, 0x0a, ORDINARY,
+            ),
+            Self::BlueMazeCenter => (
+                Exits::new(Fixed(Self::BlueMazeNorth), Fixed(Self::BlueMazeEntrance), Fixed(Self::BlueMazeSouth), Fixed(Self::BlueMazeEntrance)),
+                &WALLS_BLUE_MAZE_CENTER, 0x86, 0x0a, ORDINARY,
+            ),
+            Self::BlueMazeEntrance => (
+                Exits::new(Fixed(Self::BlueMaze05), Fixed(Self::BlueMazeCenter), Fixed(Self::WestHall), Fixed(Self::BlueMazeCenter)),
+                &WALLS_BLUE_MAZE_ENTRANCE, 0x86, 0x0a, ORDINARY,
+            ),
+
+            // The catacombs share a dark palette and open into the two side passages.
+            Self::CatacombsCenter => (
+                Exits::new(Fixed(Self::CatacombsEntrance), Fixed(Self::CatacombsEntrance), Fixed(Self::CatacombsSide), Fixed(Self::CatacombsEntrance)),
+                &WALLS_CATACOMBS_CENTER, 0x08, 0x08, DARK,
+            ),
+            Self::CatacombsEntrance => (
+                Exits::new(Fixed(Self::SecretPassage), Fixed(Self::CatacombsCenter), Fixed(Self::CatacombsCenter), Fixed(Self::CatacombsCenter)),
+                &WALLS_CATACOMBS_ENTRANCE, 0x08, 0x08, DARK,
+            ),
+            Self::CatacombsSide => (
+                Exits::new(Fixed(Self::CatacombsCenter), Fixed(Self::SidePassage0c), Fixed(Self::PurpleChamber), Fixed(Self::SidePassage0d)),
+                &WALLS_CATACOMBS_SIDE, 0x08, 0x08, DARK,
+            ),
+            Self::SidePassage0c => (
+                Exits::new(Fixed(Self::PurpleChamber), Fixed(Self::SidePassage0d), Fixed(Self::RedHall), Fixed(Self::CatacombsSide)),
+                &WALLS_SIDE_PASSAGE, 0x98, 0x0a, RIGHT_BARRIER,
+            ),
+            Self::SidePassage0d => (
+                Exits::new(Fixed(Self::WhiteCastle), Fixed(Self::CatacombsSide), Fixed(Self::AboveWhiteCastle), Fixed(Self::SidePassage0c)),
+                &WALLS_SIDE_PASSAGE, 0xb8, 0x0a, LEFT_BARRIER,
+            ),
+
+            // Facade edges remain ordinary map connections outside the gate openings.
+            Self::AboveWhiteCastle => (
+                Exits::new(Fixed(Self::SidePassage0d), Fixed(Self::BlackCastle), Fixed(Self::WhiteCastle), Fixed(Self::BlackCastle)),
+                &WALLS_TOP_OPENING, 0xa8, 0x0a, ORDINARY,
+            ),
+            Self::WhiteCastle => (
+                Exits::new(Fixed(Self::AboveWhiteCastle), Fixed(Self::WhiteCastle), Fixed(Self::SidePassage0d), Fixed(Self::WhiteCastle)),
+                &WALLS_CASTLE, 0x0c, 0x0c, ORDINARY,
+            ),
+            Self::BlackCastle => (
+                Exits::new(Fixed(Self::WestHall), Fixed(Self::PurpleChamber), Fixed(Self::BlueMazeNorth), Fixed(Self::PurpleChamber)),
+                &WALLS_CASTLE, 0x00, 0x02, ORDINARY,
+            ),
+            Self::GoldCastle => (
+                Exits::new(Fixed(Self::BlueMazeSouth), Fixed(Self::SecretPassage), Fixed(Self::BelowGoldCastle), Fixed(Self::WestHall)),
+                &WALLS_CASTLE, 0x1a, 0x0a, ORDINARY,
+            ),
+
+            // Two dark-maze rooms repeat their wall artwork instead of mirroring it.
+            Self::BlackMaze13 => (
+                Exits::new(Fixed(Self::BlackMazeDot), Fixed(Self::BlackMaze14), Fixed(Self::BlackMazeDot), Fixed(Self::BlackMazeEntrance)),
+                &WALLS_BLACK_MAZE_13, 0x08, 0x08, DARK,
+            ),
+            Self::BlackMaze14 => (
+                Exits::new(Fixed(Self::BlackMazeEntrance), Fixed(Self::BlackMazeDot), Fixed(Self::BlackMazeEntrance), Fixed(Self::BlackMaze13)),
+                &WALLS_BLACK_MAZE_14, 0x08, 0x08, DARK_REPEATED,
+            ),
+            Self::BlackMazeDot => (
+                Exits::new(Fixed(Self::BlackMaze13), Fixed(Self::BlackMazeEntrance), Fixed(Self::BlackMaze13), Fixed(Self::BlackMaze14)),
+                &WALLS_BLACK_MAZE_DOT, 0x08, 0x08, DARK_REPEATED,
+            ),
+            Self::BlackMazeEntrance => (
+                Exits::new(Fixed(Self::BlackMaze14), Fixed(Self::BlackMaze13), Fixed(Self::BlackCastleInterior), Fixed(Self::BlackMazeDot)),
+                &WALLS_BLACK_MAZE_ENTRANCE, 0x08, 0x08, DARK,
+            ),
+
+            // White Castle contains the red maze; Black Castle's ordinary exits depend on the game.
+            Self::RedMaze17 => (
+                Exits::new(Fixed(Self::RedMazeSouth), Fixed(Self::RedMazeNorth), Fixed(Self::RedMazeSouth), Fixed(Self::RedMazeNorth)),
+                &WALLS_RED_MAZE_17, 0x36, 0x0a, ORDINARY,
+            ),
+            Self::RedMazeNorth => (
+                Exits::new(Fixed(Self::WhiteCastleInterior), Fixed(Self::RedMaze17), Fixed(Self::WhiteCastleInterior), Fixed(Self::RedMaze17)),
+                &WALLS_RED_MAZE_NORTH, 0x36, 0x0a, ORDINARY,
+            ),
+            Self::RedMazeSouth => (
+                Exits::new(Fixed(Self::RedMaze17), Fixed(Self::WhiteCastleInterior), Fixed(Self::RedMaze17), Fixed(Self::WhiteCastleInterior)),
+                &WALLS_RED_MAZE_SOUTH, 0x36, 0x0a, ORDINARY,
+            ),
+            Self::WhiteCastleInterior => (
+                Exits::new(Fixed(Self::RedMazeNorth), Fixed(Self::RedMazeSouth), Fixed(Self::RedMazeNorth), Fixed(Self::RedMazeSouth)),
+                &WALLS_WHITE_CASTLE_INTERIOR, 0x36, 0x0a, ORDINARY,
+            ),
+            Self::BlackCastleInterior => (
+                Exits::new(ByGame { first: Self::PurpleChamber, later: Self::BlackMazeEntrance }, ByGame { first: Self::PurpleChamber, later: Self::BlackMazeEntrance }, ByGame { first: Self::PurpleChamber, later: Self::BlackMazeEntrance }, ByGame { first: Self::PurpleChamber, later: Self::BlackMazeEntrance }),
+                &WALLS_BLACK_CASTLE_INTERIOR, 0x36, 0x0a, ORDINARY,
+            ),
+
+            // The remaining chambers connect the two castle mazes to the outdoor map.
+            Self::PurpleChamber => (
+                Exits::new(Fixed(Self::RedHall), Fixed(Self::BlueMazeCenter), ByGame { first: Self::BlackCastleInterior, later: Self::SidePassage0c }, Fixed(Self::BlueMazeEntrance)),
+                &WALLS_ENCLOSED_ROOM, 0x66, 0x0a, ORDINARY,
+            ),
+            Self::RedHall => (
+                Exits::new(ByGame { first: Self::SecretPassage, later: Self::SidePassage0c }, Fixed(Self::WestHall), Fixed(Self::BlackCastle), Fixed(Self::SecretPassage)),
+                &WALLS_TOP_OPENING, 0x36, 0x0a, ORDINARY,
+            ),
+            Self::RobinettCredits => (
+                Exits::new(Fixed(Self::BlueMazeSouth), Fixed(Self::WestHall), Fixed(Self::BlueMazeSouth), Fixed(Self::SecretPassage)),
+                &WALLS_OPEN_HALL, 0x66, 0x0a, ORDINARY,
+            ),
+        };
+        RoomDefinition {
+            exits,
+            walls,
+            color,
+            monochrome,
+            features,
+        }
+    }
+}
+
+// Wall artwork.
+
+static WALLS_SECRET_PASSAGE: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0xff),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+];
+
+static WALLS_OPEN_HALL: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0xff),
+];
+
+static WALLS_SIDE_PASSAGE: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+];
+
+static WALLS_ENCLOSED_ROOM: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0xff),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+];
+
+static WALLS_BLACK_CASTLE_INTERIOR: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+];
+
+static WALLS_BLUE_MAZE_NORTH: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+    PlayfieldRow::new(0x00, 0x0c, 0x0c),
+    PlayfieldRow::new(0xf0, 0x0c, 0x3c),
+    PlayfieldRow::new(0xf0, 0x0c, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x3f),
+    PlayfieldRow::new(0x00, 0x30, 0x30),
+    PlayfieldRow::new(0xf0, 0x33, 0x3f),
+];
+
+static WALLS_BLUE_MAZE_05: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0xff),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xfc, 0xff),
+    PlayfieldRow::new(0xf0, 0x00, 0xc0),
+    PlayfieldRow::new(0xf0, 0x3f, 0xcf),
+    PlayfieldRow::new(0x00, 0x30, 0xcc),
+    PlayfieldRow::new(0xf0, 0xf3, 0xcc),
+];
+
+static WALLS_BLUE_MAZE_SOUTH: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xf3, 0x0c),
+    PlayfieldRow::new(0x00, 0x30, 0x0c),
+    PlayfieldRow::new(0xf0, 0x3f, 0x0f),
+    PlayfieldRow::new(0xf0, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xf0, 0x00),
+    PlayfieldRow::new(0x00, 0x30, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0xff),
+];
+
+static WALLS_BLUE_MAZE_CENTER: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0x33, 0x3f),
+    PlayfieldRow::new(0x00, 0x30, 0x3c),
+    PlayfieldRow::new(0xf0, 0xff, 0x3c),
+    PlayfieldRow::new(0x00, 0x03, 0x3c),
+    PlayfieldRow::new(0xf0, 0x33, 0x3c),
+    PlayfieldRow::new(0x00, 0x33, 0x0c),
+    PlayfieldRow::new(0xf0, 0xf3, 0x0c),
+];
+
+static WALLS_BLUE_MAZE_ENTRANCE: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xf3, 0xcc),
+    PlayfieldRow::new(0x00, 0x33, 0x0c),
+    PlayfieldRow::new(0xf0, 0x33, 0xfc),
+    PlayfieldRow::new(0x00, 0x33, 0x00),
+    PlayfieldRow::new(0xf0, 0xf3, 0xff),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+];
+
+static WALLS_CATACOMBS_CENTER: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0xcc),
+    PlayfieldRow::new(0x00, 0x00, 0xcc),
+    PlayfieldRow::new(0xf0, 0x03, 0xcf),
+    PlayfieldRow::new(0x00, 0x03, 0x00),
+    PlayfieldRow::new(0xf0, 0xf3, 0xfc),
+    PlayfieldRow::new(0x00, 0x33, 0x0c),
+    PlayfieldRow::new(0xf0, 0x33, 0xcc),
+];
+
+static WALLS_CATACOMBS_SIDE: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0x33, 0xcc),
+    PlayfieldRow::new(0x00, 0x30, 0xcc),
+    PlayfieldRow::new(0x00, 0x3f, 0xcf),
+    PlayfieldRow::new(0x00, 0x00, 0xc0),
+    PlayfieldRow::new(0x00, 0x3f, 0xc3),
+    PlayfieldRow::new(0x00, 0x30, 0xc0),
+    PlayfieldRow::new(0xf0, 0xff, 0xff),
+];
+
+static WALLS_CATACOMBS_ENTRANCE: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+    PlayfieldRow::new(0x00, 0x30, 0x00),
+    PlayfieldRow::new(0xf0, 0x30, 0xff),
+    PlayfieldRow::new(0x00, 0x30, 0xc0),
+    PlayfieldRow::new(0xf0, 0xf3, 0xc0),
+    PlayfieldRow::new(0x00, 0x03, 0xc0),
+    PlayfieldRow::new(0xf0, 0xff, 0xcc),
+];
+
+static WALLS_CASTLE: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xfe, 0x15),
+    PlayfieldRow::new(0x30, 0x03, 0x1f),
+    PlayfieldRow::new(0x30, 0x03, 0xff),
+    PlayfieldRow::new(0x30, 0x00, 0xff),
+    PlayfieldRow::new(0x30, 0x00, 0x3f),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+];
+
+static WALLS_RED_MAZE_17: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0xff),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+    PlayfieldRow::new(0x00, 0x00, 0x0c),
+    PlayfieldRow::new(0xf0, 0xff, 0x0c),
+    PlayfieldRow::new(0xf0, 0x03, 0xcc),
+    PlayfieldRow::new(0xf0, 0x33, 0xcf),
+];
+
+static WALLS_RED_MAZE_SOUTH: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0x33, 0xcf),
+    PlayfieldRow::new(0xf0, 0x30, 0x00),
+    PlayfieldRow::new(0xf0, 0x33, 0xff),
+    PlayfieldRow::new(0x00, 0x33, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x00),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+];
+
+static WALLS_RED_MAZE_NORTH: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0xff),
+    PlayfieldRow::new(0x00, 0x00, 0xc0),
+    PlayfieldRow::new(0xf0, 0xff, 0xcf),
+    PlayfieldRow::new(0x00, 0x00, 0xcc),
+    PlayfieldRow::new(0xf0, 0x33, 0xff),
+    PlayfieldRow::new(0xf0, 0x33, 0x00),
+    PlayfieldRow::new(0xf0, 0x3f, 0x0c),
+];
+
+static WALLS_WHITE_CASTLE_INTERIOR: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0x3f, 0x0c),
+    PlayfieldRow::new(0xf0, 0x00, 0x0c),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+    PlayfieldRow::new(0x00, 0x30, 0x00),
+    PlayfieldRow::new(0xf0, 0x30, 0x00),
+    PlayfieldRow::new(0x00, 0x30, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+];
+
+static WALLS_TOP_OPENING: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0xff),
+];
+
+static WALLS_BLACK_MAZE_13: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xf0, 0xff),
+    PlayfieldRow::new(0x00, 0x00, 0x03),
+    PlayfieldRow::new(0xf0, 0xff, 0x03),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x3f, 0xff),
+    PlayfieldRow::new(0x00, 0x30, 0x00),
+    PlayfieldRow::new(0xf0, 0xf0, 0xff),
+];
+
+static WALLS_BLACK_MAZE_DOT: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xf0, 0xff),
+    PlayfieldRow::new(0x30, 0x00, 0x00),
+    PlayfieldRow::new(0x30, 0x3f, 0xff),
+    PlayfieldRow::new(0x00, 0x30, 0x00),
+    PlayfieldRow::new(0xf0, 0xf0, 0xff),
+    PlayfieldRow::new(0x30, 0x00, 0x03),
+    PlayfieldRow::new(0xf0, 0xf0, 0xff),
+];
+
+static WALLS_BLACK_MAZE_14: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0xf0, 0xff, 0xff),
+    PlayfieldRow::new(0x00, 0x00, 0xc0),
+    PlayfieldRow::new(0xf0, 0xff, 0xcf),
+    PlayfieldRow::new(0x00, 0x00, 0x0c),
+    PlayfieldRow::new(0xf0, 0x0f, 0xff),
+    PlayfieldRow::new(0x00, 0x0f, 0xc0),
+    PlayfieldRow::new(0x30, 0xcf, 0xcc),
+];
+
+static WALLS_BLACK_MAZE_ENTRANCE: [PlayfieldRow; 7] = [
+    PlayfieldRow::new(0x30, 0xcf, 0xcc),
+    PlayfieldRow::new(0x00, 0xc0, 0xcc),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+    PlayfieldRow::new(0x00, 0x00, 0x00),
+    PlayfieldRow::new(0xf0, 0xff, 0x0f),
+];
+
+// Sprite artwork.
+
+static GATE_IMAGE: [u8; 17] = [
+    0xfe, // |███████ |
+    0xaa, // |█ █ █ █ |
+    0xfe, // |███████ |
+    0xaa, // |█ █ █ █ |
+    0xfe, // |███████ |
+    0xaa, // |█ █ █ █ |
+    0xfe, // |███████ |
+    0xaa, // |█ █ █ █ |
+    0xfe, // |███████ |
+    0xaa, // |█ █ █ █ |
+    0xfe, // |███████ |
+    0xaa, // |█ █ █ █ |
+    0xfe, // |███████ |
+    0xaa, // |█ █ █ █ |
+    0xfe, // |███████ |
+    0xaa, // |█ █ █ █ |
+    0x00, // |        |
+];
+
+static LIGHT_IMAGE: [u8; 33] = [
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0xff, // |████████|
+    0x00, // |        |
+];
+
+static BRIDGE_IMAGE: [u8; 25] = [
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0x42, // | █    █ |
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0x00, // |        |
+];
+
+static GAME_ONE_IMAGE: [u8; 8] = [
+    0x04, // |     █  |
+    0x0c, // |    ██  |
+    0x04, // |     █  |
+    0x04, // |     █  |
+    0x04, // |     █  |
+    0x04, // |     █  |
+    0x0e, // |    ███ |
+    0x00, // |        |
+];
+
+static KEY_IMAGE: [u8; 4] = [
+    0x07, // |     ███|
+    0xfd, // |██████ █|
+    0xa7, // |█ █  ███|
+    0x00, // |        |
+];
+
+static GAME_TWO_IMAGE: [u8; 8] = [
+    0x0e, // |    ███ |
+    0x11, // |   █   █|
+    0x01, // |       █|
+    0x02, // |      █ |
+    0x04, // |     █  |
+    0x08, // |    █   |
+    0x1f, // |   █████|
+    0x00, // |        |
+];
+
+static GAME_THREE_IMAGE: [u8; 8] = [
+    0x0e, // |    ███ |
+    0x11, // |   █   █|
+    0x01, // |       █|
+    0x06, // |     ██ |
+    0x01, // |       █|
+    0x11, // |   █   █|
+    0x0e, // |    ███ |
+    0x00, // |        |
+];
+
+static BAT_FRAME_ONE: [u8; 8] = [
+    0x81, // |█      █|
+    0x81, // |█      █|
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0xff, // |████████|
+    0x5a, // | █ ██ █ |
+    0x66, // | ██  ██ |
+    0x00, // |        |
+];
+
+static BAT_FRAME_TWO: [u8; 12] = [
+    0x01, // |       █|
+    0x80, // |█       |
+    0x01, // |       █|
+    0x80, // |█       |
+    0x3c, // |  ████  |
+    0x5a, // | █ ██ █ |
+    0x66, // | ██  ██ |
+    0xc3, // |██    ██|
+    0x81, // |█      █|
+    0x81, // |█      █|
+    0x81, // |█      █|
+    0x00, // |        |
+];
+
+static DRAGON_WALKING_IMAGE: [u8; 21] = [
+    0x06, // |     ██ |
+    0x0f, // |    ████|
+    0xf3, // |████  ██|
+    0xfe, // |███████ |
+    0x0e, // |    ███ |
+    0x04, // |     █  |
+    0x04, // |     █  |
+    0x1e, // |   ████ |
+    0x3f, // |  ██████|
+    0x7f, // | ███████|
+    0xe3, // |███   ██|
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0xc7, // |██   ███|
+    0xff, // |████████|
+    0x3c, // |  ████  |
+    0x08, // |    █   |
+    0x8f, // |█   ████|
+    0xe1, // |███    █|
+    0x3f, // |  ██████|
+    0x00, // |        |
+];
+
+static DRAGON_BITING_IMAGE: [u8; 23] = [
+    0x80, // |█       |
+    0x40, // | █      |
+    0x26, // |  █  ██ |
+    0x1f, // |   █████|
+    0x0b, // |    █ ██|
+    0x0e, // |    ███ |
+    0x1e, // |   ████ |
+    0x24, // |  █  █  |
+    0x44, // | █   █  |
+    0x8e, // |█   ███ |
+    0x1e, // |   ████ |
+    0x3f, // |  ██████|
+    0x7f, // | ███████|
+    0x7f, // | ███████|
+    0x7f, // | ███████|
+    0x7f, // | ███████|
+    0x3e, // |  █████ |
+    0x1c, // |   ███  |
+    0x08, // |    █   |
+    0xf8, // |█████   |
+    0x80, // |█       |
+    0xe0, // |███     |
+    0x00, // |        |
+];
+
+static DRAGON_DEAD_IMAGE: [u8; 18] = [
+    0x0c, // |    ██  |
+    0x0c, // |    ██  |
+    0x0c, // |    ██  |
+    0x0e, // |    ███ |
+    0x1b, // |   ██ ██|
+    0x7f, // | ███████|
+    0xce, // |██  ███ |
+    0x80, // |█       |
+    0xfc, // |██████  |
+    0xfe, // |███████ |
+    0xfe, // |███████ |
+    0x7e, // | ██████ |
+    0x78, // | ████   |
+    0x20, // |  █     |
+    0x6e, // | ██ ███ |
+    0x42, // | █    █ |
+    0x7e, // | ██████ |
+    0x00, // |        |
+];
+
+static SWORD_IMAGE: [u8; 6] = [
+    0x20, // |  █     |
+    0x40, // | █      |
+    0xff, // |████████|
+    0x40, // | █      |
+    0x20, // |  █     |
+    0x00, // |        |
+];
+
+static DOT_IMAGE: [u8; 2] = [
+    0x80, // |█       |
+    0x00, // |        |
+];
+
+static ROBINETT_CREDITS_IMAGE: [u8; 96] = [
+    0xf0, // |████    |
+    0x80, // |█       |
+    0x80, // |█       |
+    0x80, // |█       |
+    0xf4, // |████ █  |
+    0x04, // |     █  |
+    0x87, // |█    ███|
+    0xe5, // |███  █ █|
+    0x87, // |█    ███|
+    0x80, // |█       |
+    0x05, // |     █ █|
+    0xe5, // |███  █ █|
+    0xa7, // |█ █  ███|
+    0xe1, // |███    █|
+    0x87, // |█    ███|
+    0xe0, // |███     |
+    0x01, // |       █|
+    0xe0, // |███     |
+    0xa0, // |█ █     |
+    0xf0, // |████    |
+    0x01, // |       █|
+    0x40, // | █      |
+    0xe0, // |███     |
+    0x40, // | █      |
+    0x40, // | █      |
+    0x40, // | █      |
+    0x01, // |       █|
+    0xe0, // |███     |
+    0xa0, // |█ █     |
+    0xe0, // |███     |
+    0x80, // |█       |
+    0xe0, // |███     |
+    0x01, // |       █|
+    0x20, // |  █     |
+    0x20, // |  █     |
+    0xe0, // |███     |
+    0xa0, // |█ █     |
+    0xe0, // |███     |
+    0x01, // |       █|
+    0x01, // |       █|
+    0x01, // |       █|
+    0x88, // |█   █   |
+    0xa8, // |█ █ █   |
+    0xa8, // |█ █ █   |
+    0xa8, // |█ █ █   |
+    0xf8, // |█████   |
+    0x01, // |       █|
+    0xe0, // |███     |
+    0xa0, // |█ █     |
+    0xf0, // |████    |
+    0x01, // |       █|
+    0x80, // |█       |
+    0xe0, // |███     |
+    0x8f, // |█   ████|
+    0x89, // |█   █  █|
+    0x0f, // |    ████|
+    0x8a, // |█   █ █ |
+    0xe9, // |███ █  █|
+    0x80, // |█       |
+    0x8e, // |█   ███ |
+    0x0a, // |    █ █ |
+    0xee, // |███ ███ |
+    0xa0, // |█ █     |
+    0xe8, // |███ █   |
+    0x88, // |█   █   |
+    0xee, // |███ ███ |
+    0x0a, // |    █ █ |
+    0x8e, // |█   ███ |
+    0xe0, // |███     |
+    0xa4, // |█ █  █  |
+    0xa4, // |█ █  █  |
+    0x04, // |     █  |
+    0x80, // |█       |
+    0x08, // |    █   |
+    0x0e, // |    ███ |
+    0x0a, // |    █ █ |
+    0x0a, // |    █ █ |
+    0x80, // |█       |
+    0x0e, // |    ███ |
+    0x0a, // |    █ █ |
+    0x0e, // |    ███ |
+    0x08, // |    █   |
+    0x0e, // |    ███ |
+    0x80, // |█       |
+    0x04, // |     █  |
+    0x0e, // |    ███ |
+    0x04, // |     █  |
+    0x04, // |     █  |
+    0x04, // |     █  |
+    0x80, // |█       |
+    0x04, // |     █  |
+    0x0e, // |    ███ |
+    0x04, // |     █  |
+    0x04, // |     █  |
+    0x04, // |     █  |
+    0x00, // |        |
+];
+
+static CHALICE_IMAGE: [u8; 10] = [
+    0x81, // |█      █|
+    0x81, // |█      █|
+    0xc3, // |██    ██|
+    0x7e, // | ██████ |
+    0x7e, // | ██████ |
+    0x3c, // |  ████  |
+    0x18, // |   ██   |
+    0x18, // |   ██   |
+    0x7e, // | ██████ |
+    0x00, // |        |
+];
+
+static EMPTY_IMAGE: [u8; 1] = [
+    0x00, // |        |
+];
+
+static MAGNET_IMAGE: [u8; 9] = [
+    0x3c, // |  ████  |
+    0x7e, // | ██████ |
+    0xe7, // |███  ███|
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0xc3, // |██    ██|
+    0x00, // |        |
 ];
 
 #[cfg(test)]
