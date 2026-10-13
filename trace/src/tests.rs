@@ -140,6 +140,52 @@ fn replay_checks_inputs_at_exact_semantic_reads() {
     assert!(replay.check().unwrap_err().contains("trace divergence"));
 }
 #[test]
+fn input_changes_are_per_control_and_replay_at_the_recorded_read() {
+    let mut record = Session::record();
+    record.at(Point::Console);
+    record.input(Control::Reset, 1);
+    record.input(Control::Select, 0);
+    record.input(Control::Reset, 1);
+    record.at(Point::History);
+    record.input(Control::Reset, 1);
+    record.next_frame();
+    record.at(Point::Console);
+    record.input(Control::Reset, 1);
+    record.at(Point::History);
+    record.input(Control::Reset, 0);
+    record.input(Control::Reset, 0);
+    record.input(Control::Reset, 1);
+    record.finish().unwrap();
+    let inputs: Vec<_> = record
+        .records()
+        .iter()
+        .filter_map(|r| match r.event {
+            Event::Input(control, value) => Some((r.at, control, value)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inputs.len(), 4);
+    assert_eq!(inputs[2].0.ordinal, 0);
+    assert_eq!(inputs[3].0.ordinal, 1);
+
+    // Unchanged reads retain the supplied value across points and frames despite different live inputs.
+    let mut replay = Session::replay(record.records().to_vec()).unwrap();
+    replay.at(Point::Console);
+    assert_eq!(replay.input(Control::Reset, 0), 1);
+    assert_eq!(replay.input(Control::Select, 1), 0);
+    assert_eq!(replay.input(Control::Reset, 0), 1);
+    replay.at(Point::History);
+    assert_eq!(replay.input(Control::Reset, 0), 1);
+    replay.next_frame();
+    replay.at(Point::Console);
+    assert_eq!(replay.input(Control::Reset, 0), 1);
+    replay.at(Point::History);
+    assert_eq!(replay.input(Control::Reset, 1), 0);
+    assert_eq!(replay.input(Control::Reset, 0), 1);
+    replay.finish().unwrap();
+}
+
+#[test]
 fn malformed_lifecycle_is_rejected() {
     let mut s = Session::record();
     s.finish().unwrap();

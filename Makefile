@@ -1,85 +1,67 @@
-# Each implementation owns its dependency tracking and build outputs.
+# Cargo owns Rust dependency tracking and the shared target directory.
+.DEFAULT_GOAL := all
 .NOTPARALLEL:
 .DELETE_ON_ERROR:
-.PHONY: all original gameplay analysis verify lint check rust rust-release rust-check run rust-smoke
-.PHONY: refactored refactored-release refactored-check refactored-run refactored-smoke
-.PHONY: trace-check validator validator-check validate mostlyclean clean
-DASM ?= .tools/dasm
-PYTHON ?= python3
-UV ?= uv
 CARGO ?= cargo
+UV ?= uv
+PYTHON ?= python3
+DASM ?= $(abspath rom/tools/dasm)
+PACKAGES := directport scanline rawemulator trace
+MANIFESTS := Cargo.toml $(addsuffix /Cargo.toml,$(PACKAGES))
+.PHONY: all release format fmt lint check rom gameplay analysis verify rom-check
+.PHONY: $(PACKAGES) $(addsuffix -check,$(PACKAGES))
+.PHONY: directport-run scanline-run rawemulator-run directport-smoke scanline-smoke
+.PHONY: validate mostlyclean clean
 
-all: original rust refactored validator
+Cargo.lock: $(MANIFESTS)
+	$(CARGO) generate-lockfile
+	touch $@
 
-original:
-	$(MAKE) -C original all DASM="$(abspath $(DASM))" PYTHON="$(PYTHON)"
+all release: Cargo.lock
+	$(CARGO) build --locked --release --workspace --bins
 
-gameplay analysis verify:
-	$(MAKE) -C original $@ DASM="$(abspath $(DASM))" PYTHON="$(PYTHON)"
+$(PACKAGES): Cargo.lock
+	$(CARGO) build --locked --release -p $(if $(filter trace,$@),adventure-trace,$@)
 
-# Other build directories share the locally built assembler through this file target.
-.tools/dasm: original/Makefile
-	$(MAKE) -C original "$(abspath .tools/dasm)"
+# Formatting and linting precede behavioral checks, including ROM verification.
+format:
+	$(CARGO) fmt --all
 
-lint:
-	$(MAKE) -C original lint UV="$(UV)"
+fmt:
+	$(CARGO) fmt --all --check
 
-check: lint trace-check rust-check refactored-check validator-check verify
+lint: fmt Cargo.lock
+	$(CARGO) clippy --locked --workspace --all-targets -- -D warnings
 
-rust:
-	$(MAKE) -C translation all CARGO="$(CARGO)"
+check: lint
+	$(MAKE) -C rom check DASM="$(DASM)" PYTHON="$(PYTHON)" UV="$(UV)"
+	$(CARGO) test --locked --workspace $(TEST_ARGS)
 
-rust-release:
-	$(MAKE) -C translation release CARGO="$(CARGO)"
+$(addsuffix -check,$(PACKAGES)): Cargo.lock
+	$(CARGO) fmt --all --check
+	$(CARGO) clippy --locked -p $(if $(filter trace-check,$@),adventure-trace,$(@:-check=)) --all-targets -- -D warnings
+	$(CARGO) test --locked -p $(if $(filter trace-check,$@),adventure-trace,$(@:-check=)) $(TEST_ARGS)
 
-rust-check:
-	$(MAKE) -C translation check CARGO="$(CARGO)" TEST_ARGS="$(TEST_ARGS)"
+# Run from the workspace root so user paths and smoke captures have one base.
+directport-run scanline-run rawemulator-run: Cargo.lock
+	$(CARGO) run --locked --release -p $(@:-run=) --bin $(@:-run=) -- $(ARGS)
 
-run: rust-release
-	translation/target/release/adventure $(ARGS)
+directport-smoke scanline-smoke: Cargo.lock
+	$(CARGO) run --locked -p $(@:-smoke=) --bin $@ -- $(ARGS)
 
-rust-smoke:
-	$(MAKE) -C translation smoke CARGO="$(CARGO)"
-
-refactored:
-	$(MAKE) -C refactored all CARGO="$(CARGO)"
-
-refactored-release:
-	$(MAKE) -C refactored release CARGO="$(CARGO)"
-
-refactored-check:
-	$(MAKE) -C refactored check CARGO="$(CARGO)" DASM="$(abspath $(DASM))" TEST_ARGS="$(TEST_ARGS)"
-
-refactored-run:
-	$(MAKE) -C refactored run CARGO="$(CARGO)" ARGS="$(ARGS)"
-
-refactored-smoke:
-	$(MAKE) -C refactored smoke CARGO="$(CARGO)"
-
-trace-check:
-	$(MAKE) -C trace check CARGO="$(CARGO)"
-
-validator:
-	$(MAKE) -C validator all CARGO="$(CARGO)" DASM="$(abspath $(DASM))"
-
-validator-check:
-	$(MAKE) -C validator check CARGO="$(CARGO)" DASM="$(abspath $(DASM))" TEST_ARGS="$(TEST_ARGS)"
-
-validate: validator
+validate: rawemulator
 	@test -n "$(TRACE)" || { echo 'Usage: make validate TRACE=playthrough.trace' >&2; exit 1; }
-	target/validator/release/adventure-validator "$(TRACE)"
+	target/release/rawemulator "$(TRACE)"
 
-# Source files, locks, configurations, and recorded user traces are never cleanup outputs.
+rom gameplay analysis verify rom-check:
+	$(MAKE) -C rom $(if $(filter rom,$@),all,$(if $(filter rom-check,$@),check,$@)) DASM="$(DASM)" PYTHON="$(PYTHON)" UV="$(UV)"
+
+# Keep release executables usable while discarding compiler intermediates.
 mostlyclean:
-	$(MAKE) -C original mostlyclean
-	$(MAKE) -C trace mostlyclean
-	$(MAKE) -C validator mostlyclean
-	$(MAKE) -C translation mostlyclean
-	$(MAKE) -C refactored mostlyclean
+	rm -rf target/debug target/release/deps target/release/build target/release/incremental target/release/.fingerprint target/release/examples
+	rm -f target/directport-smoke.bmp target/directport-smoke.trace target/scanline-smoke.bmp
+	$(MAKE) -C rom mostlyclean
 
-clean:
-	$(MAKE) -C original clean
-	$(MAKE) -C trace clean
-	$(MAKE) -C validator clean
-	$(MAKE) -C translation clean
-	$(MAKE) -C refactored clean
+clean: mostlyclean
+	$(CARGO) clean
+	$(MAKE) -C rom clean

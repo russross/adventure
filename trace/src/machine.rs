@@ -220,6 +220,7 @@ pub struct Session {
     writer: Option<Box<dyn Write>>,
     finished: bool,
     transitions: BTreeSet<(Point, Object)>,
+    inputs: BTreeMap<Control, u8>,
 }
 impl Session {
     pub fn record() -> Self {
@@ -298,14 +299,26 @@ impl Session {
     }
     pub fn input(&mut self, control: Control, live: u8) -> u8 {
         let point = self.point.unwrap_or(Point::Boot);
+        // Replay holds each consumed control until its next change reaches the recorded read.
+        let ordinal = self.ordinals.get(&point).copied().unwrap_or(0);
         let value = match self.expected.as_ref().and_then(|v| v.front()) {
             Some(Record {
+                at,
                 event: Event::Input(c, v),
-                ..
-            }) if *c == control => *v,
+            }) if *c == control
+                && at.frame == self.frame
+                && at.point == point
+                && at.ordinal == ordinal =>
+            {
+                *v
+            }
+            _ if self.expected.is_some() => self.inputs.get(&control).copied().unwrap_or(live),
             _ => live,
         };
-        self.emit(point, Event::Input(control, value));
+        // The first read establishes the value; only later changes consume a record ordinal.
+        if self.inputs.insert(control, value) != Some(value) {
+            self.emit(point, Event::Input(control, value));
+        }
         value
     }
     fn emit(&mut self, point: Point, event: Event) {

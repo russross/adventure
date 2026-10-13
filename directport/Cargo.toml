@@ -1,0 +1,18 @@
+[package]
+name = "directport"
+version = "0.1.0"
+edition = "2024"
+default-run = "directport"
+
+[[bin]]
+name = "directport"
+path = "src/main.rs"
+
+[dependencies]
+adventure-trace.workspace = true
+sdl2.workspace = true
+
+[[bin]]
+name = "directport-smoke"
+path = "src/bin/sdl_smoke.rs"
+

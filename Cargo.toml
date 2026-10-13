@@ -1,0 +1,9 @@
+[workspace]
+members = ["directport", "scanline", "rawemulator", "trace"]
+resolver = "3"
+
+# Cargo shares dependency versions and build outputs across the implementations.
+[workspace.dependencies]
+adventure-trace = { path = "trace" }
+directport = { path = "directport" }
+sdl2 = { version = "0.38", features = ["use-pkgconfig"] }

@@ -1,12 +1,12 @@
 use std::cell::RefCell;
 
-use adventure_port::adventure::Adventure;
-use adventure_port::hardware::FrameHost;
-use adventure_port::input::{Controls, Difficulty, Direction};
-use adventure_port::replay::ReplayHost;
-use adventure_port::sound::Sound;
-use adventure_port::tia::Frame;
 use adventure_trace::{Record, Session};
+use directport::adventure::Adventure;
+use directport::hardware::FrameHost;
+use directport::input::{Controls, Difficulty, Direction};
+use directport::replay::ReplayHost;
+use directport::sound::Sound;
+use directport::tia::Frame;
 
 struct ScriptedHost {
     frame: u64,
@@ -56,11 +56,11 @@ impl ScriptedHost {
             } else {
                 Difficulty::B
             },
-            left: adventure_port::input::Joystick {
+            left: directport::input::Joystick {
                 direction,
                 fire: f % 19 < 3,
             },
-            right: adventure_port::input::Joystick {
+            right: directport::input::Joystick {
                 direction: Direction {
                     up: f.is_multiple_of(41),
                     ..Direction::default()
@@ -139,7 +139,7 @@ pub fn record_castle() -> (Adventure, Vec<Record>) {
             self.0 += 1;
             Ok(Some(Controls {
                 reset: f < 3,
-                left: adventure_port::input::Joystick {
+                left: directport::input::Joystick {
                     direction: Direction {
                         left: (6..54).contains(&f),
                         up: (57..90).contains(&f) || (183..252).contains(&f),

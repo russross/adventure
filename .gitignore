@@ -2,4 +2,7 @@ target
 build
 __pycache__
 .venv/
-.tools/
+.ruff_cache/
+/rom/tools/dasm
+/rom/tools/dasm-*/
+/rom/tools/dasm.tar.gz

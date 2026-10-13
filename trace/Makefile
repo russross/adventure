@@ -1,30 +1,28 @@
-.NOTPARALLEL:
+# Workspace rules keep Cargo outputs and run paths consistent.
 .DEFAULT_GOAL := all
-.PHONY: all format fmt lint check mostlyclean clean
-CARGO ?= cargo
-export CARGO_TARGET_DIR := $(abspath ../target/trace)
+.PHONY: all release format fmt lint check mostlyclean clean
 
-Cargo.lock: Cargo.toml
-	$(CARGO) generate-lockfile
-	touch $@
+all:
+	$(MAKE) -C .. trace
 
-all: Cargo.lock
-	$(CARGO) build --locked
+release:
+	$(MAKE) -C .. trace
 
 format:
-	$(CARGO) fmt
+	$(MAKE) -C .. format
 
 fmt:
-	$(CARGO) fmt --check
+	$(MAKE) -C .. fmt
 
-lint: fmt Cargo.lock
-	$(CARGO) clippy --locked --all-targets -- -D warnings
+lint:
+	$(MAKE) -C .. lint
 
-check: lint
-	$(CARGO) test --locked
+check:
+	$(MAKE) -C .. trace-check
 
 mostlyclean:
-	rm -rf $(CARGO_TARGET_DIR)/debug $(CARGO_TARGET_DIR)/release/deps $(CARGO_TARGET_DIR)/release/build $(CARGO_TARGET_DIR)/release/incremental $(CARGO_TARGET_DIR)/release/.fingerprint
+	$(MAKE) -C .. mostlyclean
 
-clean: mostlyclean
-	rm -rf $(CARGO_TARGET_DIR)
+clean:
+	$(MAKE) -C .. clean
+
