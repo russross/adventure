@@ -1,5 +1,5 @@
 [workspace]
-members = ["directport", "scanline", "rawemulator", "trace"]
+members = ["directport", "scanline", "frame", "rawemulator", "trace"]
 resolver = "3"
 
 # Cargo shares dependency versions and build outputs across the implementations.

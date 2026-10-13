@@ -7,6 +7,8 @@ Run the refactored game:
 
 `directport/` keeps the Rust translation in ROM order. `scanline/` is an independent Rust implementation with all core game code and immutable data in `src/adventure.rs`, hardware modules directly in `src/`, and tests including the ROM oracle in `src/tests/`. Its hardware interface accepts complete scanlines instead of persistent drawable operations. Both versions retain line-by-line rendering, the three-picture gameplay cycle, and frame-boundary pacing.
 
+`frame/` copies the scanline gameplay and prepares complete pictures, painting each whole object before the next. Independent coverage masks preserve hidden collisions and foreground priority. Run it with `make frame-run`; `make frame-check` and `make frame-smoke` check its ROM equivalence and SDL behavior. Its rendering contract is in [frame/SEMANTICS.md](frame/SEMANTICS.md).
+
 SDL2 development files, `pkg-config`, and Rust with rustfmt and Clippy are required. Assembly and full-project checks also need GNU Make 4.3 or newer, a C compiler, `curl`, `tar`, `sha256sum`, Python 3.9 or newer, and `uv`. Make downloads and builds the pinned DASM assembler locally when needed. Normal execution uses compiled assets and does not read a cartridge file. The preserved assembly editions and analysis tools reside in `rom/`; the reference `rom/adventure.bin` and rendering fixture are tracked inputs.
 
 

@@ -224,3 +224,9 @@ Semantic trace verification
 ---------------------------
 
 Both Rust ports can record boot-to-exit game observations with `--record FILE` and replay them headlessly with `--replay FILE`. The shared contracts, text grammar, normalization, input consumption, collision observations, and independent cartridge validation are specified in [trace/SEMANTICS.md](trace/SEMANTICS.md). `make validate TRACE=FILE` builds and runs the headless original-instruction validator. Recording and replay preserve the existing game scheduling and frame-host interfaces.
+
+
+Frame implementation
+--------------------
+
+`frame/` follows all gameplay, input, presentation, audio, coordinate, and collision contracts above. It prepares a complete picture and composes whole layers instead of sending scanlines to video. Separate geometric coverage preserves collision contacts even when higher-priority colors hide objects. The exact picture preparation and composition workflow is specified in [frame/SEMANTICS.md](frame/SEMANTICS.md). `scanline/` remains unchanged.

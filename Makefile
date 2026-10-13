@@ -7,11 +7,11 @@ UV ?= uv
 ROM_MAKE ?= $(shell command -v gmake 2>/dev/null || command -v make)
 PYTHON ?= python3
 DASM ?= $(abspath rom/tools/dasm)
-PACKAGES := directport scanline rawemulator trace
+PACKAGES := directport scanline frame rawemulator trace
 MANIFESTS := Cargo.toml $(addsuffix /Cargo.toml,$(PACKAGES))
 .PHONY: all release format fmt lint check test rom gameplay analysis verify rom-check
 .PHONY: $(PACKAGES) $(addsuffix -check,$(PACKAGES))
-.PHONY: directport-run scanline-run rawemulator-run directport-smoke scanline-smoke
+.PHONY: directport-run scanline-run frame-run rawemulator-run directport-smoke scanline-smoke frame-smoke
 .PHONY: validate mostlyclean clean
 
 Cargo.lock: $(MANIFESTS)
@@ -47,10 +47,10 @@ $(addsuffix -check,$(PACKAGES)): Cargo.lock
 	$(CARGO) test --locked -p $(if $(filter trace-check,$@),adventure-trace,$(@:-check=)) $(TEST_ARGS)
 
 # Run from the workspace root so user paths and smoke captures have one base.
-directport-run scanline-run rawemulator-run: Cargo.lock
+directport-run scanline-run frame-run rawemulator-run: Cargo.lock
 	$(CARGO) run --locked --release -p $(@:-run=) --bin $(@:-run=) -- $(ARGS)
 
-directport-smoke scanline-smoke: Cargo.lock
+directport-smoke scanline-smoke frame-smoke: Cargo.lock
 	$(CARGO) run --locked -p $(@:-smoke=) --bin $@ -- $(ARGS)
 
 validate: rawemulator
@@ -63,7 +63,7 @@ rom gameplay analysis verify rom-check:
 # Keep release executables usable while discarding compiler intermediates.
 mostlyclean:
 	rm -rf target/debug target/release/deps target/release/build target/release/incremental target/release/.fingerprint target/release/examples
-	rm -f target/directport-smoke.bmp target/directport-smoke.trace target/scanline-smoke.bmp
+	rm -f target/directport-smoke.bmp target/directport-smoke.trace target/scanline-smoke.bmp target/frame-smoke.bmp
 	$(ROM_MAKE) -C rom mostlyclean
 
 clean: mostlyclean

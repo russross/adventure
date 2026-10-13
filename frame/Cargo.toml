@@ -1,0 +1,20 @@
+[package]
+name = "frame"
+version = "0.1.0"
+edition = "2024"
+default-run = "frame"
+
+[[bin]]
+name = "frame"
+path = "src/main.rs"
+
+[[bin]]
+name = "frame-smoke"
+path = "src/tests/sdl_smoke.rs"
+
+[dependencies]
+adventure-trace.workspace = true
+sdl2.workspace = true
+
+[dev-dependencies]
+directport.workspace = true
