@@ -26,13 +26,13 @@ The root Cargo workspace owns all Rust builds, one `Cargo.lock`, and the shared 
 
 Checks run formatting, Clippy with warnings as errors, and behavioral tests. The SDL smoke runners open windows, inject controls to retrieve the Gold Key, check audio, mute, and window resizing, save `target/scanline-smoke.bmp` or `target/directport-smoke.bmp`, and close automatically.
 
-`make rom` independently assembles both disassemblies and runs analysis under `rom/build/`. `make verify` compares both rebuilt cartridges with the tracked ROM and checks control flow, graphics, and timing. Python configuration, lockfile, virtual environment, and development tools belong to `rom/`. `DASM=/absolute/path/to/dasm` selects an existing assembler; otherwise `rom/tools/dasm` is built locally.
+ROM targets select `gmake` when installed (override with `ROM_MAKE`); direct ROM commands on macOS use `gmake -C rom`. `make rom` independently assembles both disassemblies and runs analysis under `rom/build/`. `make verify` compares both rebuilt cartridges with the tracked ROM and checks control flow, graphics, and timing. Python configuration, lockfile, virtual environment, and development tools belong to `rom/`. `DASM=/absolute/path/to/dasm` selects an existing assembler; otherwise `rom/tools/dasm` is built locally.
 
 For a bounded run or BMP capture:
 
-    make scanline-run ARGS='--frames 120 --snapshot target/refactored.bmp'
+    make scanline-run ARGS='--frames 120 --snapshot target/scanline.bmp'
 
-`--unpaced` disables frame pacing for automated runs. The normal host targets 60 presentations per second; scanline drawing never sleeps. `make -C refactored mostlyclean` preserves the release executable while removing intermediates. `make -C refactored clean` removes that executable as well.
+`--unpaced` disables frame pacing for automated runs. The normal host targets 60 presentations per second; scanline drawing never sleeps. `make -C scanline mostlyclean` preserves the release executable while removing intermediates. `make -C scanline clean` removes that executable as well.
 
 `make directport-run`, `make directport-check`, and `make directport-smoke` build, check, and exercise the translation through its own Makefile. Both versions use calibrated object placement checked against an independent Stella capture.
 

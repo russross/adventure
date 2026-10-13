@@ -4,11 +4,12 @@
 .DELETE_ON_ERROR:
 CARGO ?= cargo
 UV ?= uv
+ROM_MAKE ?= $(shell command -v gmake 2>/dev/null || command -v make)
 PYTHON ?= python3
 DASM ?= $(abspath rom/tools/dasm)
 PACKAGES := directport scanline rawemulator trace
 MANIFESTS := Cargo.toml $(addsuffix /Cargo.toml,$(PACKAGES))
-.PHONY: all release format fmt lint check rom gameplay analysis verify rom-check
+.PHONY: all release format fmt lint check test rom gameplay analysis verify rom-check
 .PHONY: $(PACKAGES) $(addsuffix -check,$(PACKAGES))
 .PHONY: directport-run scanline-run rawemulator-run directport-smoke scanline-smoke
 .PHONY: validate mostlyclean clean
@@ -34,7 +35,10 @@ lint: fmt Cargo.lock
 	$(CARGO) clippy --locked --workspace --all-targets -- -D warnings
 
 check: lint
-	$(MAKE) -C rom check DASM="$(DASM)" PYTHON="$(PYTHON)" UV="$(UV)"
+	$(ROM_MAKE) -C rom check DASM="$(DASM)" PYTHON="$(PYTHON)" UV="$(UV)"
+	$(MAKE) test TEST_ARGS="$(TEST_ARGS)"
+
+test: Cargo.lock
 	$(CARGO) test --locked --workspace $(TEST_ARGS)
 
 $(addsuffix -check,$(PACKAGES)): Cargo.lock
@@ -54,14 +58,14 @@ validate: rawemulator
 	target/release/rawemulator "$(TRACE)"
 
 rom gameplay analysis verify rom-check:
-	$(MAKE) -C rom $(if $(filter rom,$@),all,$(if $(filter rom-check,$@),check,$@)) DASM="$(DASM)" PYTHON="$(PYTHON)" UV="$(UV)"
+	$(ROM_MAKE) -C rom $(if $(filter rom,$@),all,$(if $(filter rom-check,$@),check,$@)) DASM="$(DASM)" PYTHON="$(PYTHON)" UV="$(UV)"
 
 # Keep release executables usable while discarding compiler intermediates.
 mostlyclean:
 	rm -rf target/debug target/release/deps target/release/build target/release/incremental target/release/.fingerprint target/release/examples
 	rm -f target/directport-smoke.bmp target/directport-smoke.trace target/scanline-smoke.bmp
-	$(MAKE) -C rom mostlyclean
+	$(ROM_MAKE) -C rom mostlyclean
 
 clean: mostlyclean
 	$(CARGO) clean
-	$(MAKE) -C rom clean
+	$(ROM_MAKE) -C rom clean

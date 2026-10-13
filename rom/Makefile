@@ -1,4 +1,7 @@
 # Assembly outputs form groups; the analyzer never generates assembly source.
+ifeq ($(filter grouped-target,$(.FEATURES)),)
+$(error ROM builds require GNU Make 4.3 or newer; use gmake -C rom)
+endif
 .NOTPARALLEL:
 .DELETE_ON_ERROR:
 .PHONY: all gameplay analysis verify lint check mostlyclean clean
