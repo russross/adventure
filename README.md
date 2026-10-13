@@ -7,11 +7,18 @@ Run the refactored game:
 
 `translation/` keeps the Rust translation in ROM order. `refactored/` is an independent Rust implementation with all core game code and immutable data in `src/adventure.rs`, hardware modules directly in `src/`, and tests including the ROM oracle in `src/tests/`. Its hardware interface accepts complete scanlines instead of persistent drawable operations. Both versions retain line-by-line rendering, the three-picture gameplay cycle, and frame-boundary pacing.
 
-SDL2, `pkg-config`, and Rust are required. Normal execution uses compiled assets and does not read a cartridge file. The preserved assembly editions and analysis tools reside in `original/`.
+SDL2 development files, `pkg-config`, and Rust with rustfmt and Clippy are required. Assembly and full-project checks also need GNU Make 4.3 or newer, a C compiler, `curl`, `tar`, `sha256sum`, Python 3.9 or newer, and `uv`. Make downloads and builds the pinned DASM assembler locally when needed. Normal execution uses compiled assets and does not read a cartridge file. The preserved assembly editions and analysis tools reside in `original/`; the reference `ADVNTURE.BIN` and rendering fixture are tracked inputs.
 
 
 Build and checks
 ----------------
+
+From a fresh checkout, build all implementations or run all checks:
+
+    make
+    make check
+
+The root Makefile delegates assembly and analysis to `original/Makefile` and Rust builds to each implementation's Makefile. Assembly and analysis outputs reside in `original/build/`. Cargo and Python lockfiles are tracked; generated ROM fixtures, downloaded tools, virtual environments, and compiled outputs are rebuilt locally and excluded from Git. `DASM=/absolute/path/to/dasm` uses an existing assembler for assembly and test/validator fixtures.
 
     make refactored
     make refactored-check
@@ -27,7 +34,7 @@ For a bounded run or BMP capture:
 
 `--unpaced` disables frame pacing for automated runs. The normal host targets 60 presentations per second; scanline drawing never sleeps. `make -C refactored mostlyclean` preserves the release executable while removing intermediates. `make -C refactored clean` removes that executable as well.
 
-`make run`, `make rust-check`, and `make rust-smoke` build, check, and exercise the translation through its own Makefile. Both versions use calibrated object placement checked against an independent Stella capture. The root assembly and analysis targets still refer to the layout before those sources moved into `original/`.
+`make run`, `make rust-check`, and `make rust-smoke` build, check, and exercise the translation through its own Makefile. Both versions use calibrated object placement checked against an independent Stella capture.
 
 
 Record and validate a playthrough

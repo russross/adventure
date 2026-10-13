@@ -321,7 +321,7 @@ def report(rom: bytes, instructions: dict[int, Instruction], contexts: ContextTr
 
 def main() -> None:
     try:
-        rom = (ROOT / "ADVNTURE.BIN").read_bytes()
+        rom = (ROOT.parent / "ADVNTURE.BIN").read_bytes()
         if len(rom) != 4096:
             raise ValueError("Expected a 4096-byte cartridge")
         instructions = trace(rom)

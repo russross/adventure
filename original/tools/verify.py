@@ -157,7 +157,7 @@ def verify_gameplay_edition(rom: bytes, instructions: dict[int, Instruction]) ->
 
 def main() -> None:
     try:
-        original = (ROOT / "ADVNTURE.BIN").read_bytes()
+        original = (ROOT.parent / "ADVNTURE.BIN").read_bytes()
         rebuilt = (ROOT / "build/adventure.bin").read_bytes()
         require(original == rebuilt, "Assembled ROM differs from ADVNTURE.BIN")
         instructions = trace(original)

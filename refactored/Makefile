@@ -1,11 +1,13 @@
 # Cargo tracks Rust source dependencies; DASM produces only the test reference fixture.
 .NOTPARALLEL:
+.DEFAULT_GOAL := all
 .DELETE_ON_ERROR:
 .PHONY: all release run format fmt lint check smoke mostlyclean clean
 CARGO ?= cargo
+DASM ?= $(abspath ../.tools/dasm)
 export CARGO_TARGET_DIR := $(abspath ../target/refactored)
 
-Cargo.lock: Cargo.toml
+Cargo.lock: Cargo.toml ../trace/Cargo.toml ../translation/Cargo.toml
 	$(CARGO) generate-lockfile
 	touch $@
 
@@ -18,12 +20,12 @@ release: Cargo.lock
 run: release
 	cd .. && $(CARGO_TARGET_DIR)/release/refactored $(ARGS)
 
-../.tools/dasm:
+$(abspath ../.tools/dasm): ../original/Makefile
 	$(MAKE) -C .. .tools/dasm
 
-../target/refactored-oracle.bin: ../original/adventure.asm ../.tools/dasm Makefile
+../target/refactored-oracle.bin: ../original/adventure.asm $(DASM) Makefile
 	mkdir -p ../target
-	../.tools/dasm ../original/adventure.asm -f3 -o$@
+	$(DASM) ../original/adventure.asm -f3 -o$@
 	printf '%s  %s\n' b0326b45e5cab066b2d03f1e683708d82de3ffe60b2e968bf88c5494237f0a96 $@ | sha256sum -c -
 
 format:

@@ -109,15 +109,15 @@ Hardware behavior follows the [Atari Stella Programmer's Guide](https://www.atar
 Build and verification workflow
 -------------------------------
 
-`make` assembles both sources with DASM format 3. The baseline produces `build/adventure.bin`, `build/adventure.lst`, and `build/adventure.sym`. The gameplay edition produces the corresponding `build/adventure-gameplay.*` files; `make gameplay` builds just that edition. Make also runs the ROM analyzer into `build/control-flow.json`. Both assemblies are independent of that analyzer and contain no generated-source prerequisite. Editing comments or labels never requires regeneration from the ROM.
+`make` assembles both sources with DASM format 3. The baseline produces `original/build/adventure.bin`, `original/build/adventure.lst`, and `original/build/adventure.sym`. The gameplay edition produces the corresponding `original/build/adventure-gameplay.*` files; `make gameplay` builds just that edition. Make also runs the ROM analyzer into `original/build/control-flow.json`. Both assemblies are independent of that analyzer and contain no generated-source prerequisite. Editing comments or labels never requires regeneration from the ROM.
 
 The default assembler is `.tools/dasm`. If absent, Make downloads and builds upstream DASM v2.20.17 locally, using `make -C` for its build. `DASM=/absolute/path/to/dasm` overrides the default. Compilation is serialized because one assembler invocation produces all three outputs. Each output, the source, assembler executable, and Makefile participate in dependency tracking. Removing any generated assembly output regenerates the group; successful incremental builds do not remove caches first.
 
-The analyzer and verifier are executable dependency-free Python 3.9+ scripts. `uv sync` installs only the development formatting/type-checking tools recorded in `uv.lock`. Type checking covers this project's `tools/` sources; downloaded assembler research files are not project Python sources.
+The analyzer and verifier are executable dependency-free Python 3.9+ scripts. `uv sync` installs only the development formatting/type-checking tools recorded in `original/uv.lock`. Type checking covers this project's `original/tools/` sources; downloaded assembler research files are not project Python sources.
 
 `make check` completes Ruff formatting checks, Ruff lint checks, and `uv run ty check` before invoking behavioral verification. Verification compares both editions with all ROM bytes. The baseline keeps its checks for basic-block labels, matched return contexts, graphics/code separation, graphics page containment, and scanline path timing. The gameplay edition additionally checks that DASM marks every symbol as referenced, its code-label addresses exactly cover the named control targets, and each of its 464 emitted graphical rows matches the underlying sprite bits or decoded room walls. Expected failures are reported without stack traces.
 
-`make mostlyclean` removes both editions' assembly listings and symbols, analysis intermediates, Python bytecode, and downloaded assembler build intermediates, preserving both assembled ROMs and the local assembler executable. `make clean` additionally removes `build/` and `.tools/`. Neither target modifies the original dump, either assembly source, documentation, Python sources, dependency configuration, or persistent user data.
+`make mostlyclean` removes both editions' assembly listings and symbols, analysis intermediates, Python bytecode, and downloaded assembler build intermediates, preserving both assembled ROMs and the local assembler executable. `make clean` additionally removes `original/build/` and `.tools/`. Neither target modifies the original dump, either assembly source, documentation, Python sources, dependency configuration, or persistent user data.
 
 
 Rust execution workflow
@@ -213,7 +213,7 @@ The headed SDL smoke session delivers SDL Enter and arrow events through the rea
 Independent Rust refactor
 -------------------------
 
-The preserved Rust implementation now resides in `translation/`, and the preserved assembly and analysis sources reside in `original/`. Earlier path descriptions in this document refer to the layout before those moves. The root assembly and analysis targets still use that older layout; Rust targets delegate to the implementation-specific Makefiles.
+The preserved Rust implementation now resides in `translation/`, and the preserved assembly and analysis sources reside in `original/`. The root targets delegate assembly and analysis to `original/Makefile` and Rust work to each implementation-specific Makefile. The analyzer and verifier read the tracked cartridge at the repository root; generated assembly and analysis outputs reside in `original/build/`.
 
 `refactored/` adds an independent Rust game with the same gameplay contract. Its software groups immutable data by purpose and separates world state from display snapshots; its scheduler models individual picture phases. Its hardware rasterizer consumes complete scanline values and supports only the widths, barriers, walls, and priorities Adventure uses. Row staging belongs to game display construction rather than hardware drawable state. The SDL host retains frame-boundary input, audio, and pacing. The running executable has no dependency on the preserved translation; that package is used only by differential tests.
 

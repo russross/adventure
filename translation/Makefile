@@ -1,10 +1,11 @@
 # Cargo owns source dependencies; the supplied cartridge is used only by tests.
 .NOTPARALLEL:
+.DEFAULT_GOAL := all
 .DELETE_ON_ERROR:
 .PHONY: all release run format fmt lint check smoke mostlyclean clean
 CARGO ?= cargo
 
-Cargo.lock: Cargo.toml
+Cargo.lock: Cargo.toml ../trace/Cargo.toml
 	$(CARGO) generate-lockfile
 	touch $@
 

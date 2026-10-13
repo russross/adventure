@@ -1,117 +1,85 @@
-# Serialize the assembler's three outputs and the ordered verification workflow.
+# Each implementation owns its dependency tracking and build outputs.
 .NOTPARALLEL:
 .DELETE_ON_ERROR:
-.PHONY: all gameplay analysis verify lint check rust rust-release rust-check run mostlyclean clean
-
+.PHONY: all original gameplay analysis verify lint check rust rust-release rust-check run rust-smoke
+.PHONY: refactored refactored-release refactored-check refactored-run refactored-smoke
+.PHONY: trace-check validator validator-check validate mostlyclean clean
 DASM ?= .tools/dasm
 PYTHON ?= python3
 UV ?= uv
 CARGO ?= cargo
 
-all: build/adventure.bin build/adventure.lst build/adventure.sym gameplay analysis rust
+all: original rust refactored validator
 
-gameplay: build/adventure-gameplay.bin build/adventure-gameplay.lst build/adventure-gameplay.sym
+original:
+	$(MAKE) -C original all DASM="$(abspath $(DASM))" PYTHON="$(PYTHON)"
 
-build:
-	mkdir -p $@
+gameplay analysis verify:
+	$(MAKE) -C original $@ DASM="$(abspath $(DASM))" PYTHON="$(PYTHON)"
 
-# Keep the tool local; no global installation or Git operation is necessary.
-.tools/dasm: Makefile
-	mkdir -p .tools
-	curl -fL -o .tools/dasm.tar.gz https://github.com/dasm-assembler/dasm/archive/refs/tags/v2.20.17.tar.gz
-	tar -xzf .tools/dasm.tar.gz -C .tools
-	$(MAKE) -C .tools/dasm-2.20.17
-	cp .tools/dasm-2.20.17/bin/dasm $@
-
-# One invocation emits all artifacts; serialization prevents competing writers.
-build/adventure.bin build/adventure.lst build/adventure.sym: adventure.asm $(DASM) Makefile | build
-	$(DASM) adventure.asm -f3 -obuild/adventure.bin -lbuild/adventure.lst -sbuild/adventure.sym
-
-build/adventure-gameplay.bin build/adventure-gameplay.lst build/adventure-gameplay.sym: adventure-gameplay.asm $(DASM) Makefile | build
-	$(DASM) adventure-gameplay.asm -f3 -obuild/adventure-gameplay.bin -lbuild/adventure-gameplay.lst -sbuild/adventure-gameplay.sym
-
-build/control-flow.json: ADVNTURE.BIN tools/analyze.py Makefile | build
-	$(PYTHON) tools/analyze.py > $@.tmp
-	mv $@.tmp $@
-
-analysis: build/control-flow.json
+# Other build directories share the locally built assembler through this file target.
+.tools/dasm: original/Makefile
+	$(MAKE) -C original "$(abspath .tools/dasm)"
 
 lint:
-	$(UV) run ruff format --check tools
-	$(UV) run ruff check tools
-	$(UV) run ty check
+	$(MAKE) -C original lint UV="$(UV)"
 
-verify: all
-	cmp ADVNTURE.BIN build/adventure.bin
-	cmp ADVNTURE.BIN build/adventure-gameplay.bin
-	$(PYTHON) tools/verify.py
+check: lint trace-check rust-check refactored-check validator-check verify
 
-# Formatting and static checks finish before behavioral verification starts.
-check: lint rust-check
-	$(MAKE) verify DASM="$(DASM)" PYTHON="$(PYTHON)"
-
-# Each Rust implementation owns its build directory and dependency tracking.
 rust:
-	$(MAKE) -C translation all
+	$(MAKE) -C translation all CARGO="$(CARGO)"
 
 rust-release:
-	$(MAKE) -C translation release
+	$(MAKE) -C translation release CARGO="$(CARGO)"
 
 rust-check:
-	$(MAKE) -C translation check
+	$(MAKE) -C translation check CARGO="$(CARGO)" TEST_ARGS="$(TEST_ARGS)"
 
 run: rust-release
 	translation/target/release/adventure $(ARGS)
 
-.PHONY: rust-smoke
 rust-smoke:
-	$(MAKE) -C translation smoke
+	$(MAKE) -C translation smoke CARGO="$(CARGO)"
 
-# The shared trace library and independent cartridge validator own their checks.
-.PHONY: trace-check validator validator-check validate
+refactored:
+	$(MAKE) -C refactored all CARGO="$(CARGO)"
+
+refactored-release:
+	$(MAKE) -C refactored release CARGO="$(CARGO)"
+
+refactored-check:
+	$(MAKE) -C refactored check CARGO="$(CARGO)" DASM="$(abspath $(DASM))" TEST_ARGS="$(TEST_ARGS)"
+
+refactored-run:
+	$(MAKE) -C refactored run CARGO="$(CARGO)" ARGS="$(ARGS)"
+
+refactored-smoke:
+	$(MAKE) -C refactored smoke CARGO="$(CARGO)"
+
 trace-check:
-	$(MAKE) -C trace check
+	$(MAKE) -C trace check CARGO="$(CARGO)"
 
 validator:
-	$(MAKE) -C validator all
+	$(MAKE) -C validator all CARGO="$(CARGO)" DASM="$(abspath $(DASM))"
 
 validator-check:
-	$(MAKE) -C validator check
+	$(MAKE) -C validator check CARGO="$(CARGO)" DASM="$(abspath $(DASM))" TEST_ARGS="$(TEST_ARGS)"
 
 validate: validator
 	@test -n "$(TRACE)" || { echo 'Usage: make validate TRACE=playthrough.trace' >&2; exit 1; }
 	target/validator/release/adventure-validator "$(TRACE)"
 
+# Source files, locks, configurations, and recorded user traces are never cleanup outputs.
 mostlyclean:
+	$(MAKE) -C original mostlyclean
 	$(MAKE) -C trace mostlyclean
 	$(MAKE) -C validator mostlyclean
 	$(MAKE) -C translation mostlyclean
 	$(MAKE) -C refactored mostlyclean
-	rm -f build/adventure.lst build/adventure.sym build/control-flow.json build/control-flow.json.tmp build/data-labels.json
-	rm -f build/adventure-gameplay.lst build/adventure-gameplay.sym
-	rm -rf tools/__pycache__ .tools/dasm-2.20.17 .tools/dasm.tar.gz
-	rm -rf target/debug target/release/deps target/release/build target/release/incremental target/release/.fingerprint target/release/examples
-	rm -f target/release/*.d target/.rustc_info.json target/rust-smoke.bmp target/rust-smoke.png
 
-clean: mostlyclean
+clean:
+	$(MAKE) -C original clean
 	$(MAKE) -C trace clean
 	$(MAKE) -C validator clean
 	$(MAKE) -C translation clean
-	rm -rf build target .tools
-
-# The independent refactor shares no runtime code with the preserved translation.
-.PHONY: refactored refactored-release refactored-check refactored-run refactored-smoke
-refactored:
-	$(MAKE) -C refactored all
-
-refactored-release:
-	$(MAKE) -C refactored release
-
-refactored-check:
-	$(MAKE) -C refactored check
-
-refactored-run:
-	$(MAKE) -C refactored run ARGS="$(ARGS)"
-
-refactored-smoke:
-	$(MAKE) -C refactored smoke
+	$(MAKE) -C refactored clean

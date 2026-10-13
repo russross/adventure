@@ -1,10 +1,15 @@
 .NOTPARALLEL:
+.DEFAULT_GOAL := all
 .PHONY: all format fmt lint check mostlyclean clean
 CARGO ?= cargo
 export CARGO_TARGET_DIR := $(abspath ../target/trace)
 
-all:
-	$(CARGO) build
+Cargo.lock: Cargo.toml
+	$(CARGO) generate-lockfile
+	touch $@
+
+all: Cargo.lock
+	$(CARGO) build --locked
 
 format:
 	$(CARGO) fmt
@@ -12,11 +17,11 @@ format:
 fmt:
 	$(CARGO) fmt --check
 
-lint: fmt
-	$(CARGO) clippy --all-targets -- -D warnings
+lint: fmt Cargo.lock
+	$(CARGO) clippy --locked --all-targets -- -D warnings
 
 check: lint
-	$(CARGO) test
+	$(CARGO) test --locked
 
 mostlyclean:
 	rm -rf $(CARGO_TARGET_DIR)/debug $(CARGO_TARGET_DIR)/release/deps $(CARGO_TARGET_DIR)/release/build $(CARGO_TARGET_DIR)/release/incremental $(CARGO_TARGET_DIR)/release/.fingerprint

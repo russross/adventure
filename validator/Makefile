@@ -1,18 +1,24 @@
 .NOTPARALLEL:
+.DEFAULT_GOAL := all
 .DELETE_ON_ERROR:
 .PHONY: all format fmt lint check run mostlyclean clean
 CARGO ?= cargo
+DASM ?= $(abspath ../.tools/dasm)
 export CARGO_TARGET_DIR := $(abspath ../target/validator)
 
-all: ../target/validator-rom.bin
-	$(CARGO) build --release
+Cargo.lock: Cargo.toml ../trace/Cargo.toml ../translation/Cargo.toml
+	$(CARGO) generate-lockfile
+	touch $@
 
-../.tools/dasm:
+all: Cargo.lock ../target/validator-rom.bin
+	$(CARGO) build --locked --release
+
+$(abspath ../.tools/dasm): ../original/Makefile
 	$(MAKE) -C .. .tools/dasm
 
-../target/validator-rom.bin: ../original/adventure-gameplay.asm ../.tools/dasm Makefile
+../target/validator-rom.bin: ../original/adventure-gameplay.asm $(DASM) Makefile
 	mkdir -p ../target
-	../.tools/dasm ../original/adventure-gameplay.asm -f3 -o$@ -l../target/validator-rom.lst -s../target/validator-rom.sym
+	$(DASM) ../original/adventure-gameplay.asm -f3 -o$@
 	printf '%s  %s\n' b0326b45e5cab066b2d03f1e683708d82de3ffe60b2e968bf88c5494237f0a96 $@ | sha256sum -c -
 
 format:
@@ -21,11 +27,11 @@ format:
 fmt:
 	$(CARGO) fmt --check
 
-lint: fmt ../target/validator-rom.bin
-	$(CARGO) clippy --all-targets -- -D warnings
+lint: fmt Cargo.lock ../target/validator-rom.bin
+	$(CARGO) clippy --locked --all-targets -- -D warnings
 
 check: lint
-	$(CARGO) test $(TEST_ARGS)
+	$(CARGO) test --locked $(TEST_ARGS)
 
 run: all
 	$(CARGO_TARGET_DIR)/release/adventure-validator $(ARGS)

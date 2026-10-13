@@ -1,5 +1,5 @@
 target
 build
 __pycache__
-uv.lock
+.venv/
 .tools/
