@@ -1,12 +1,15 @@
 //! Drive real SDL events through a short play session, then save the presented picture.
 
+use std::cell::RefCell;
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::process;
 
+use adventure_trace::Session as TraceSession;
 use frame::adventure::{Adventure, ObjectId, Room};
 use frame::hardware::{FrameHost, SdlHardware};
 use frame::input::Controls;
+use frame::replay::PlaybackHost;
 use frame::sound::{Sound, Synthesizer};
 use frame::video::Frame;
 use sdl2::event::Event;
@@ -78,7 +81,7 @@ impl FrameHost for Session {
         // arrow continues to drive the same game session through each shortcut.
         let expected_size = match frame {
             18..=20 => (320, 194),
-            24..=26 => (960, 582),
+            0..=17 | 24..=26 => (960, 582),
             _ => (640, 388),
         };
         if self.display.window_size() != expected_size {
@@ -98,21 +101,42 @@ fn execute() -> Result<(), String> {
         audible_samples: 0,
     };
     let mut game = Adventure::default();
+    game.trace = Some(RefCell::new(TraceSession::record()));
     game.run(&mut session)?;
     session
         .display
         .save_snapshot(Path::new("target/frame-smoke.bmp"))?;
-    if game.world.player.room != Room::GoldCastle || game.world.held != ObjectId::GoldKey {
+    if game.world.player.room != Room::GoldCastle
+        || game.world.carrying.item.object() != Some(ObjectId::GoldKey)
+    {
         return Err(format!(
             "SDL session failed to pick up the Gold Key: player={:?}, held={:?}",
-            game.world.player, game.world.held
+            game.world.player, game.world.carrying.item
         ));
     }
     if session.audible_samples == 0 {
         return Err("SDL session produced no Gold Key pickup audio".into());
     }
+
+    // Play the real event recording through SDL and verify the same final picture.
+    let records = game.trace.as_ref().unwrap().borrow().records().to_vec();
+    drop(session);
+    let mut replay = Adventure::default();
+    replay.trace = Some(RefCell::new(TraceSession::replay(records)?));
+    let display = SdlHardware::new(true, None)?;
+    if display.window_size() != (960, 582) {
+        return Err("default replay window size is not 3x".into());
+    }
+    let mut playback = PlaybackHost::new(display, 105);
+    replay.run(&mut playback)?;
+    if playback.interrupted()
+        || replay.video.frame.pixels != game.video.frame.pixels
+        || replay.world.carrying.item != game.world.carrying.item
+    {
+        return Err("SDL replay did not reproduce the recorded game".into());
+    }
     println!(
-        "SDL session: Gold Key pickup with audio, mute toggle/repeat, 1x/2x/3x resizing, 105 presented frames."
+        "SDL session: Gold Key pickup with audio, mute toggle/repeat, 1x/2x/3x resizing, 105 presented frames and replay."
     );
     Ok(())
 }

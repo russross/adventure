@@ -9,7 +9,7 @@ use std::process;
 use adventure_trace::{Record, Session};
 use frame::adventure::Adventure;
 use frame::hardware::SdlHardware;
-use frame::replay::ReplayHost;
+use frame::replay::PlaybackHost;
 
 #[derive(Default)]
 struct Options {
@@ -77,7 +77,7 @@ fn execute() -> Result<(), String> {
         }
     }
 
-    // Replay uses virtual frame boundaries and supplies only inputs, checking all resulting records.
+    // Replay presents every recorded picture while checking independently generated records.
     if let Some(path) = options.replay {
         if options.record.is_some()
             || options.snapshot.is_some()
@@ -99,7 +99,13 @@ fn execute() -> Result<(), String> {
         let frames = records.last().ok_or("empty trace")?.at.frame;
         let mut game = Adventure::default();
         game.trace = Some(RefCell::new(Session::replay(records)?));
-        game.run(&mut ReplayHost::new(frames))?;
+        let mut host = PlaybackHost::new(SdlHardware::new(true, None)?, frames);
+        print_controls();
+        let result = game.run(&mut host);
+        if host.interrupted() {
+            return Ok(());
+        }
+        result?;
         println!("Verified {frames} frames");
         return Ok(());
     }

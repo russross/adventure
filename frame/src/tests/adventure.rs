@@ -1,11 +1,14 @@
 use super::{
-    Adventure, Bitmap, DragonId, DragonState, Game, GateState, Gates, MovementPhase, OBJECT_IDS,
-    ObjectId, Position, ROOM_IDS, RecordId, Room, SoundEffect,
+    Adventure, BatCargo, Bitmap, Carryable, DragonId, DragonState, Game, GateState, Gates,
+    HeldObject, MovementPhase, OBJECT_IDS, ObjectDisplay, ObjectId, Position, ROOM_IDS, RecordId,
+    Room, SoundEffect, wall_rows,
 };
 use crate::hardware::FrameHost;
 use crate::input::{Controls, Difficulty, Direction};
 use crate::sound::Sound;
 use crate::video::{Contacts, Frame, HEIGHT};
+use adventure_trace::Session;
+use std::cell::RefCell;
 
 #[path = "rom_oracle.rs"]
 mod oracle;
@@ -68,6 +71,11 @@ fn game_number_byte(game: Game) -> u8 {
     }
 }
 
+// Descriptor offsets exist only in the cartridge validator; empty slots have their own final record.
+fn descriptor(object: Option<ObjectId>) -> u8 {
+    object.map_or(162, |object| object as u8 * 9)
+}
+
 fn initialized(game: Game) -> Adventure {
     let mut adventure = Adventure::default();
     adventure.world.game = game;
@@ -104,16 +112,17 @@ fn reference(game: &Adventure) -> Cpu {
     cpu.memory[0xca] = game.world.gates.black.value();
     cpu.memory[0xce] = direction_byte(game.world.bat.direction);
     cpu.memory[0xcf] = game.world.bat.animation;
-    cpu.memory[0xd0] = game.world.bat.carried.map_or(0x78, |record| {
+    cpu.memory[0xd0] = game.world.bat.carried.map_or(0x78, |cargo| {
+        let record = cargo.record();
         RECORDS.iter().find(|(_, r)| *r == record).unwrap().0 as u8
     });
     cpu.memory[0xd1] = game.world.bat.flight_timer;
-    cpu.memory[0x95] = game.world.first_visible as u8 * 9;
-    cpu.memory[0x96] = game.world.second_visible as u8 * 9;
+    cpu.memory[0x95] = descriptor(game.world.visible[0]);
+    cpu.memory[0x96] = descriptor(game.world.visible[1]);
     cpu.memory[0x9c] = game.world.last_candidate as u8 * 9;
-    cpu.memory[0x9d] = game.world.held as u8 * 9;
-    cpu.memory[0x9e] = game.world.held_offset_x;
-    cpu.memory[0x9f] = game.world.held_offset_y;
+    cpu.memory[0x9d] = descriptor(game.world.carrying.item.object());
+    cpu.memory[0x9e] = game.world.carrying.offset.x;
+    cpu.memory[0x9f] = game.world.carrying.offset.y;
     cpu.memory[0x99] = direction_byte(game.world.joystick_direction);
     cpu.memory[0xdd] = game_number_byte(game.world.game);
     cpu.memory[0xde] = if game.world.won { 255 } else { 0 };
@@ -276,12 +285,12 @@ fn bridge_rollback_pickup_and_carried_offsets_match_rom() {
             }
         }
     }
-    for held in [ObjectId::Empty, ObjectId::Sword] {
+    for held in [HeldObject::Empty, HeldObject::Item(Carryable::Sword)] {
         let mut port = initialized(Game::One);
         port.world.player = Position::new(Room::WestHall, 50, 50);
         port.world.sword = port.world.player;
-        port.world.first_visible = ObjectId::Sword;
-        port.world.held = held;
+        port.world.visible[0] = Some(ObjectId::Sword);
+        port.world.carrying.item = held;
         port.world.joystick_direction.right = true;
         port.video.contacts.player_objects[0] = true;
         let mut cpu = reference(&port);
@@ -324,8 +333,8 @@ fn dragon_state_machine_matches_rom_across_games_and_difficulties() {
                     port.world.sword = Position::new(Room::WestHall, 60, 50);
                     port.world.dragon_mut(dragon).position = Position::new(Room::WestHall, 80, 50);
                     port.world.dragon_mut(dragon).state = state;
-                    port.world.first_visible = dragon.object();
-                    port.world.second_visible = ObjectId::Sword;
+                    port.world.visible[0] = Some(dragon.object());
+                    port.world.visible[1] = Some(ObjectId::Sword);
                     port.video.contacts = Contacts {
                         player_objects: [bits & 4 != 0, false],
                         objects_touch: bits & 8 != 0,
@@ -357,7 +366,7 @@ fn bat_gates_magnet_and_darkness_match_rom() {
         port.world.bat.position = Position::new(Room::WestHall, 60, 50);
         port.world.bat.flight_timer = timer;
         port.world.chalice = Position::new(Room::WestHall, 61, 50);
-        port.world.held = ObjectId::Chalice;
+        port.world.carrying.item = HeldObject::Item(Carryable::Chalice);
         let mut cpu = reference(&port);
         cpu.call(0xf8a5);
         port.update_bat();
@@ -366,8 +375,8 @@ fn bat_gates_magnet_and_darkness_match_rom() {
     for value in [0, 1, 2, 27, 28, 29, 54, 55] {
         let mut port = initialized(Game::One);
         port.world.gates.gold = GateState::from_value(value);
-        port.world.first_visible = ObjectId::GoldGate;
-        port.world.second_visible = ObjectId::GoldKey;
+        port.world.visible[0] = Some(ObjectId::GoldGate);
+        port.world.visible[1] = Some(ObjectId::GoldKey);
         port.video.contacts.objects_touch = true;
         port.video.contacts.player_objects[0] = true;
         let mut cpu = reference(&port);
@@ -465,7 +474,11 @@ fn bat_cargo_exclusion_and_magnet_priorities_match_rom() {
         RecordId::Magnet,
     ];
     for first in 0..=items.len() {
-        for carried in [None, Some(RecordId::Chalice), Some(RecordId::Sword)] {
+        for carried in [
+            None,
+            Some(BatCargo::Item(Carryable::Chalice)),
+            Some(BatCargo::Item(Carryable::Sword)),
+        ] {
             for aligned in [false, true] {
                 let mut port = initialized(Game::Two);
                 port.world.bat.position = Position::new(Room::WestHall, 80, 50);
@@ -538,8 +551,8 @@ fn reinitialization_preserves_retained_state_like_the_rom() {
         port.world.idle_ticks = 37;
         port.world.idle_periods = 0x90;
         port.world.light = Position::new(Room::CatacombsSide, 44, 66);
-        port.world.held_offset_x = 19;
-        port.world.held_offset_y = 241;
+        port.world.carrying.offset.x = 19;
+        port.world.carrying.offset.y = 241;
         port.world.fire_was_pressed = false;
         port.world.previous_reset = false;
         port.world.previous_select = false;
@@ -547,7 +560,7 @@ fn reinitialization_preserves_retained_state_like_the_rom() {
         port.world.sound_remaining = 17;
         port.world.sound_effect = SoundEffect::Roar;
         port.world.rhindle.state = DragonState::Dead;
-        port.world.bat.carried = Some(RecordId::Chalice);
+        port.world.bat.carried = Some(BatCargo::Item(Carryable::Chalice));
         port.world.bat.flight_timer = 99;
         port.sound.voice(8, 12, 3);
 
@@ -577,15 +590,26 @@ fn visible_selection_and_every_object_image_range_match_rom() {
             assert_state(&port, &cpu, "display selection");
             assert_eq!(
                 [
-                    port.display.first_position.x,
-                    port.display.first_position.y,
-                    port.display.second_position.x,
-                    port.display.second_position.y
+                    port.world.visible[0]
+                        .map_or(port.world.bridge, |id| port.find_object_position(id))
+                        .x,
+                    port.world.visible[0]
+                        .map_or(port.world.bridge, |id| port.find_object_position(id))
+                        .y,
+                    port.world.visible[1]
+                        .map_or(port.world.bridge, |id| port.find_object_position(id))
+                        .x,
+                    port.world.visible[1]
+                        .map_or(port.world.bridge, |id| port.find_object_position(id))
+                        .y
                 ],
                 cpu.memory[0x86..0x8a]
             );
             assert_eq!(
-                [port.display.objects[0].color, port.display.objects[1].color],
+                [
+                    port.display.objects[0].line.color,
+                    port.display.objects[1].line.color
+                ],
                 [cpu.memory[6], cpu.memory[7]]
             );
         }
@@ -822,6 +846,130 @@ fn functional_kernel_matches_rom_output_order_for_every_room() {
     }
 }
 
+#[test]
+fn room_palettes_and_features_match_rom_in_color_monochrome_and_idle_modes() {
+    for room in ROOM_IDS {
+        for color in [false, true] {
+            for periods in [0, 0x80, 0x91] {
+                let mut game = initialized(Game::Two);
+                game.world.player.room = room;
+                game.controls.color = color;
+                game.world.idle_ticks = 137;
+                game.world.idle_periods = periods;
+                let mut cpu = reference(&game);
+                cpu.call(0xf10f);
+                game.prepare_room_display();
+                let appearance = game.display.appearance;
+                let context = format!("{room:?}, color {color}, idle {periods}");
+                assert_eq!(appearance.foreground, cpu.memory[8], "{context}");
+                assert_eq!(appearance.background, cpu.memory[9], "{context}");
+                assert_eq!(appearance.mirrored, cpu.memory[10] & 1 != 0, "{context}");
+                assert_eq!(
+                    appearance.walls_in_front,
+                    cpu.memory[10] & 4 != 0,
+                    "{context}"
+                );
+                assert_eq!(
+                    appearance.player_width,
+                    1 << ((cpu.memory[10] >> 4) & 3),
+                    "{context}"
+                );
+                assert_eq!(
+                    appearance.barriers,
+                    [cpu.memory[0x1d] & 2 != 0, cpu.memory[0x1e] & 2 != 0],
+                    "{context}"
+                );
+            }
+        }
+    }
+}
+
+// Both renderers consume independently prepared snapshots, including a second picture without refresh.
+fn assert_picture_matches_rom(game: &mut Adventure, cpu: &mut Cpu, context: &str) {
+    cpu.call(0xf008);
+    game.draw_room();
+    let raster = &cpu.raster.as_ref().unwrap().tia;
+    assert_eq!(
+        game.video.frame.painted_lines, raster.frame.painted_lines,
+        "{context}"
+    );
+    assert_eq!(
+        game.video.frame.pixels, raster.frame.pixels,
+        "{context}: pixels"
+    );
+    assert_eq!(
+        format!("{:?}", game.video.contacts),
+        format!("{:?}", raster.contacts),
+        "{context}: contacts"
+    );
+}
+
+#[test]
+fn retained_layers_match_rom_across_all_vertical_bytes_and_both_sprite_widths() {
+    for (first, second) in [
+        (RecordId::Sword, RecordId::Bridge),
+        (RecordId::Bridge, RecordId::Light),
+        (RecordId::Sword, RecordId::Chalice),
+    ] {
+        for y in 0..=255 {
+            let mut game = initialized(Game::Two);
+            for (_, record) in RECORDS {
+                game.world.position_mut(record).room = Room::RedHall;
+            }
+            game.world.player = Position::new(Room::WestHall, 80, y);
+            *game.world.position_mut(first) = Position::new(Room::WestHall, 78, y);
+            *game.world.position_mut(second) = Position::new(Room::WestHall, 79, 255 - y);
+            let mut cpu = reference(&game);
+            cpu.call(0xf10f);
+            game.prepare_room_display();
+            cpu.raster = Some(oracle::Raster::new(&cpu.memory));
+            cpu.raster.as_mut().unwrap().tia.left_barrier.reposition(13);
+            cpu.raster
+                .as_mut()
+                .unwrap()
+                .tia
+                .right_barrier
+                .reposition(150);
+            let context = format!("{first:?}/{second:?}, y {y}");
+            assert_picture_matches_rom(&mut game, &mut cpu, &context);
+
+            // Live object changes cannot alter cached rows; player coverage and its leading row remain live.
+            *game.world.position_mut(first) = Position::new(Room::GoldTreasury, 0, 0);
+            *game.world.position_mut(second) = Position::new(Room::GoldTreasury, 0, 0);
+            game.world.player.y = 255 - y;
+            cpu.memory[0x8c] = game.world.player.y;
+            assert_picture_matches_rom(&mut game, &mut cpu, &format!("{context}, retained"));
+        }
+    }
+}
+
+#[test]
+fn empty_display_slots_keep_the_roms_blank_bridge_position_convention() {
+    let mut game = initialized(Game::Two);
+    for (_, record) in RECORDS {
+        game.world.position_mut(record).room = Room::RedHall;
+    }
+    game.world.player = Position::new(Room::GoldTreasury, 80, 50);
+    game.world.bridge.x = 255;
+    game.world.bridge.y = 200;
+    game.world.idle_periods = 0x91;
+    let mut cpu = reference(&game);
+    cpu.call(0xf10f);
+    game.prepare_room_display();
+    assert_eq!(game.world.visible, [None; 2]);
+    assert_state(&game, &cpu, "empty display");
+    assert_eq!(
+        [
+            game.display.objects[0].line.color,
+            game.display.objects[1].line.color
+        ],
+        [cpu.memory[6], cpu.memory[7]]
+    );
+    cpu.raster = Some(oracle::Raster::new(&cpu.memory));
+    assert_picture_matches_rom(&mut game, &mut cpu, "empty display");
+    assert_eq!(game.video.contacts.player_objects, [false; 2]);
+}
+
 // Identical scripted controls exercise retained pictures across whole scheduler turns.
 #[derive(Debug, PartialEq, Eq)]
 struct Presented {
@@ -950,6 +1098,38 @@ impl directport::hardware::FrameHost for TraceHost {
 }
 
 #[test]
+fn recording_is_observational_for_pictures_audio_contacts_and_world_state() {
+    struct BoundedHost(TraceHost);
+    impl FrameHost for BoundedHost {
+        fn sample_controls(&mut self) -> Result<Option<Controls>, String> {
+            FrameHost::sample_controls(&mut self.0)
+        }
+
+        fn present(&mut self, frame: &Frame, sound: &Sound) -> Result<Option<Controls>, String> {
+            if self.0.frame == 401 {
+                return Ok(None);
+            }
+            self.0.present(frame, sound)
+        }
+    }
+
+    let mut plain = Adventure::default();
+    let mut recorded = Adventure {
+        trace: Some(RefCell::new(Session::record())),
+        ..Adventure::default()
+    };
+    let mut plain_host = BoundedHost(TraceHost::default());
+    let mut recorded_host = BoundedHost(TraceHost::default());
+    plain.run(&mut plain_host).unwrap();
+    recorded.run(&mut recorded_host).unwrap();
+    assert_eq!(plain_host.0.presented, recorded_host.0.presented);
+    assert_eq!(reference(&plain).memory, reference(&recorded).memory);
+    assert_eq!(plain.video.contacts, recorded.video.contacts);
+    assert_eq!(plain.video.frame.pixels, recorded.video.frame.pixels);
+    assert!(plain.phase == recorded.phase);
+}
+
+#[test]
 fn long_frame_and_state_sequences_match_translation_in_all_games() {
     use directport::adventure as translated;
     for (game, original_game) in [
@@ -1012,19 +1192,47 @@ fn long_frame_and_state_sequences_match_translation_in_all_games() {
                     gold_key,
                     white_key,
                     black_key,
-                    bat,
                     gates,
                     game,
                     won,
-                    held,
-                    held_offset_x,
-                    held_offset_y,
-                    first_visible,
-                    second_visible,
                     last_candidate,
                     joystick_direction,
                     idle_ticks,
                     idle_periods
+                );
+                // Normalize changed types only at the reference boundary, retaining every public value.
+                let held = port
+                    .world
+                    .carrying
+                    .item
+                    .object()
+                    .map_or("Empty".to_owned(), |id| format!("{id:?}"));
+                assert_eq!(held, format!("{:?}", original.ram.held));
+                assert_eq!(port.world.carrying.offset.x, original.ram.held_offset_x);
+                assert_eq!(port.world.carrying.offset.y, original.ram.held_offset_y);
+                assert_eq!(
+                    descriptor(port.world.visible[0]),
+                    original.ram.first_visible as u8 * 9
+                );
+                assert_eq!(
+                    descriptor(port.world.visible[1]),
+                    original.ram.second_visible as u8 * 9
+                );
+                let bat = port.world.bat;
+                let original_bat = original.ram.bat;
+                assert_eq!(
+                    format!("{:?}", bat.position),
+                    format!("{:?}", original_bat.position)
+                );
+                assert_eq!(
+                    format!("{:?}", bat.direction),
+                    format!("{:?}", original_bat.direction)
+                );
+                assert_eq!(bat.animation, original_bat.animation);
+                assert_eq!(bat.flight_timer, original_bat.flight_timer);
+                assert_eq!(
+                    format!("{:?}", bat.carried.map(BatCargo::record)),
+                    format!("{:?}", original_bat.carried)
                 );
                 assert_eq!(host.frame, reference_host.frame);
             }
@@ -1072,7 +1280,7 @@ fn initial_game_one_picture_matches_stella_pixels() {
 
 #[test]
 fn prepared_scanlines_match_stella_coordinate_boundaries() {
-    use crate::video::{Appearance, ObjectLine, PlayfieldRow, SpriteWidth, WIDTH};
+    use crate::video::{Appearance, PlayfieldRow, SpriteWidth, WIDTH};
     let cases = [
         (0, 159),
         (1, 0),
@@ -1096,17 +1304,22 @@ fn prepared_scanlines_match_stella_coordinate_boundaries() {
                 player_width: 1,
                 ..Appearance::default()
             };
-            game.display.room_walls = &NO_WALLS;
-            game.display.first_position = Position::new(Room::GoldCastle, coordinate, 64);
-            game.display.first_image = Bitmap::new(&[0x80, 0]);
-            game.display.second_image = Bitmap::new(&[0]);
+            game.display.walls = wall_rows(&NO_WALLS);
             game.display.objects = [
-                ObjectLine {
+                ObjectDisplay {
+                    position: Position::new(Room::GoldCastle, coordinate, 64),
+                    bitmap: Bitmap::new(&[0x80, 0]),
                     color: 72,
                     width,
-                    ..ObjectLine::default()
-                },
-                ObjectLine::default(),
+                }
+                .prepare(0),
+                ObjectDisplay {
+                    position: Position::default(),
+                    bitmap: Bitmap::new(&[0]),
+                    color: 0,
+                    width: SpriteWidth::Normal,
+                }
+                .prepare(1),
             ];
             game.world.player = Position::new(Room::GoldCastle, coordinate, 32);
             game.draw_room();

@@ -100,7 +100,7 @@ impl SdlHardware {
         let sdl = sdl2::init()?;
         let video = sdl.video()?;
         let window = video
-            .window("Adventure", WINDOW_WIDTH * 2, WINDOW_HEIGHT * 2)
+            .window("Adventure", WINDOW_WIDTH * 3, WINDOW_HEIGHT * 3)
             .position_centered()
             .resizable()
             .build()
