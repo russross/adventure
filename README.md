@@ -39,6 +39,17 @@ For a bounded run or BMP capture:
 `make directport-run`, `make directport-check`, and `make directport-smoke` build, check, and exercise the translation through its own Makefile. Both versions use calibrated object placement checked against an independent Stella capture.
 
 
+Record and replay the frame version
+-----------------------------------
+
+    make frame-run ARGS='--record playthrough.input'
+    make frame-run ARGS='--replay playthrough.input'
+
+Recording saves only changes to inputs observed by gameplay and the stopping boundary. Replay re-emulates the game with those inputs, using SDL audio and pacing. Mute, window size, and quit remain available. It does not validate game state. Files depend on the frame version's logical input read schedule.
+
+For the existing validation trace workflow, use `--trace playthrough.trace` and `--verify playthrough.trace` with `frame-run`. The other versions retain their existing option names.
+
+
 Record and validate a playthrough
 --------------------------------
 

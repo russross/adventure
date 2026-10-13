@@ -70,6 +70,9 @@ impl Adventure {
     }
     // Ordinary play returns live input unchanged. Playback supplies input without changing world state.
     pub(super) fn input_value(&self, control: Control, live: u8) -> u8 {
+        let live = self.recording.as_ref().map_or(live, |recording| {
+            recording.borrow_mut().input(control, live)
+        });
         self.trace
             .as_ref()
             .map_or(live, |trace| trace.borrow_mut().input(control, live))

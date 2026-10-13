@@ -2,6 +2,7 @@
 
 use crate::hardware::FrameHost;
 use crate::input::{Controls, Difficulty, Direction};
+use crate::recording::Recording;
 use crate::sound::Sound;
 use crate::video::{
     Appearance, HEIGHT, Object, ObjectLine, Picture, PlayfieldRow, SpriteWidth, Video, WIDTH,
@@ -677,6 +678,7 @@ pub struct Adventure {
     pub sound: Sound,
     pub controls: Controls,
     pub trace: Option<RefCell<Session>>,
+    pub recording: Option<RefCell<Recording>>,
     display: PreparedDisplay,
     player_visible: bool,
     phase: PicturePhase,
@@ -694,15 +696,24 @@ impl Adventure {
     // The entry keeps startup and the repeated game-turn sequence separate.
     pub fn run(&mut self, host: &mut impl FrameHost) -> Result<(), String> {
         if !self.power_on(host)? {
+            if let Some(recording) = &self.recording {
+                recording.borrow_mut().finish()?;
+            }
             if let Some(trace) = &self.trace {
                 trace.borrow_mut().finish()?;
             }
             return Ok(());
         }
         while self.advance_picture(host)? {
+            if let Some(recording) = &self.recording {
+                recording.borrow().check()?;
+            }
             if let Some(trace) = &self.trace {
                 trace.borrow().check()?;
             }
+        }
+        if let Some(recording) = &self.recording {
+            recording.borrow_mut().finish()?;
         }
         if let Some(trace) = &self.trace {
             trace.borrow_mut().finish()?;
@@ -718,6 +729,13 @@ impl Adventure {
         self.display = PreparedDisplay::default();
         self.player_visible = false;
         self.sound = Sound::default();
+        if self
+            .recording
+            .as_ref()
+            .is_some_and(|recording| recording.borrow().stopped_at_boot())
+        {
+            return Ok(false);
+        }
         if self
             .trace
             .as_ref()
@@ -831,6 +849,9 @@ impl Adventure {
         match host.present(&self.video.frame, &self.sound)? {
             Some(controls) => {
                 self.controls = controls;
+                if let Some(recording) = &self.recording {
+                    recording.borrow_mut().next_frame();
+                }
                 if let Some(trace) = &self.trace {
                     trace.borrow_mut().next_frame();
                 }

@@ -1,4 +1,4 @@
-//! Replay hosts; controls are supplied at logical reads by the trace session.
+//! Replay hosts; input sessions supply controls at logical gameplay reads.
 
 use crate::hardware::FrameHost;
 use crate::input::Controls;

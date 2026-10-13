@@ -9,6 +9,7 @@ use std::process;
 use adventure_trace::{Record, Session};
 use frame::adventure::Adventure;
 use frame::hardware::SdlHardware;
+use frame::recording::Recording;
 use frame::replay::PlaybackHost;
 
 #[derive(Default)]
@@ -18,6 +19,8 @@ struct Options {
     snapshot: Option<PathBuf>,
     record: Option<PathBuf>,
     replay: Option<PathBuf>,
+    trace: Option<PathBuf>,
+    verify: Option<PathBuf>,
 }
 
 // Share the compact keyboard reference between normal startup and command help.
@@ -53,12 +56,22 @@ fn execute() -> Result<(), String> {
             "--unpaced" => options.unpaced = true,
             "--record" => {
                 options.record = Some(PathBuf::from(
-                    args.next().ok_or("--record needs a trace path")?,
+                    args.next().ok_or("--record needs a recording path")?,
                 ))
             }
             "--replay" => {
                 options.replay = Some(PathBuf::from(
-                    args.next().ok_or("--replay needs a trace path")?,
+                    args.next().ok_or("--replay needs a recording path")?,
+                ))
+            }
+            "--trace" => {
+                options.trace = Some(PathBuf::from(
+                    args.next().ok_or("--trace needs a trace path")?,
+                ))
+            }
+            "--verify" => {
+                options.verify = Some(PathBuf::from(
+                    args.next().ok_or("--verify needs a trace path")?,
                 ))
             }
             "--snapshot" => {
@@ -68,7 +81,7 @@ fn execute() -> Result<(), String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: frame [--frames N] [--unpaced] [--snapshot FILE.bmp] [--record FILE]\n       frame --replay FILE"
+                    "Usage: frame [--frames N] [--unpaced] [--snapshot FILE.bmp] [--record FILE] [--trace FILE]\n       frame --replay FILE\n       frame --verify FILE"
                 );
                 print_controls();
                 return Ok(());
@@ -77,15 +90,34 @@ fn execute() -> Result<(), String> {
         }
     }
 
-    // Replay presents every recorded picture while checking independently generated records.
-    if let Some(path) = options.replay {
-        if options.record.is_some()
+    // Playback owns the stopping boundary; presentation shortcuts remain live.
+    if (options.replay.is_some() || options.verify.is_some())
+        && (options.replay.is_some() && options.verify.is_some()
+            || options.record.is_some()
+            || options.trace.is_some()
             || options.snapshot.is_some()
             || options.frames.is_some()
-            || options.unpaced
-        {
-            return Err("--replay cannot be combined with live-play options".into());
-        }
+            || options.unpaced)
+    {
+        return Err(
+            "--replay and --verify cannot be combined with each other or live-play options".into(),
+        );
+    }
+    if let Some(path) = options.replay {
+        let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let recording = Recording::replay(BufReader::new(file))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let frames = recording.frames();
+        let mut game = Adventure::default();
+        game.recording = Some(RefCell::new(recording));
+        let mut host = PlaybackHost::new(SdlHardware::new(true, None)?, frames);
+        print_controls();
+        game.run(&mut host)?;
+        return Ok(());
+    }
+
+    // Verification independently generates the complete semantic trace.
+    if let Some(path) = options.verify {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let records: Vec<Record> = BufReader::new(file)
             .lines()
@@ -115,6 +147,10 @@ fn execute() -> Result<(), String> {
     print_controls();
     let mut game = Adventure::default();
     if let Some(path) = options.record {
+        let file = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        game.recording = Some(RefCell::new(Recording::record_to(BufWriter::new(file))?));
+    }
+    if let Some(path) = options.trace {
         let file = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         game.trace = Some(RefCell::new(Session::record_to(BufWriter::new(file))?));
     }
