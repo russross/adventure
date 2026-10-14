@@ -5,6 +5,8 @@ Run the refactored game:
 
     make run
 
+Run the Python port with `make -C py run`. It uses pygame-ce and preserves the refactored game's behavior with a simpler runtime and no tracing or replay. See [py/README.md](py/README.md).
+
 `translation/` keeps the Rust translation in ROM order. `refactored/` is an independent Rust implementation with all core game code and immutable data in `src/adventure.rs`, hardware modules directly in `src/`, and tests including the ROM oracle in `src/tests/`. Its hardware interface accepts complete scanlines instead of persistent drawable operations. Both versions retain line-by-line rendering, the three-picture gameplay cycle, and frame-boundary pacing.
 
 SDL2 development files, `pkg-config`, and Rust with rustfmt and Clippy are required. Assembly and full-project checks also need GNU Make 4.3 or newer, a C compiler, `curl`, `tar`, `sha256sum`, Python 3.9 or newer, and `uv`. Make downloads and builds the pinned DASM assembler locally when needed. Normal execution uses compiled assets and does not read a cartridge file. The preserved assembly editions and analysis tools reside in `original/`; the reference `ADVNTURE.BIN` and rendering fixture are tracked inputs.

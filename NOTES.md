@@ -224,3 +224,9 @@ Semantic trace verification
 ---------------------------
 
 Both Rust ports can record boot-to-exit game observations with `--record FILE` and replay them headlessly with `--replay FILE`. The shared contracts, text grammar, normalization, input consumption, collision observations, and independent cartridge validation are specified in [trace/SEMANTICS.md](trace/SEMANTICS.md). `make validate TRACE=FILE` builds and runs the headless original-instruction validator. Recording and replay preserve the existing game scheduling and frame-host interfaces.
+
+
+Python port
+-----------
+
+`py/` contains an independent, readable Python port of the refactored game without trace, replay, or test infrastructure. `make -C py run` installs its locked pygame-ce dependency with uv and starts the game. Its world, picture scheduling, collision, display, and audio flows are documented in [py/NOTES.md](py/NOTES.md). `make -C py check` runs Ruff formatting/lint and ty. Cleanup belongs to `py/Makefile`; the root aggregate build/check targets continue to cover the existing implementations.
