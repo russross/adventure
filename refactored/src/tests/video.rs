@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+fn retained_rows_restore_contacts_and_replace_changed_geometry() {
+    let mut video = Video::default();
+    let mut line = Scanline {
+        appearance: Appearance {
+            foreground: 28,
+            walls_in_front: true,
+            player_width: 4,
+            ..Appearance::default()
+        },
+        walls: PlayfieldRow::new(0x10, 0, 0),
+        objects: [ObjectLine {
+            bits: 0xff,
+            color: 72,
+            ..ObjectLine::default()
+        }; 2],
+        player_visible: true,
+        ..Scanline::default()
+    };
+    video.paint(&line);
+    let pixels = video.frame.pixels.clone();
+    let contacts = video.contacts;
+    assert!(contacts.player_walls && contacts.objects_touch);
+    assert_eq!(contacts.player_objects, [true; 2]);
+
+    // Repeated pictures must reconstruct contacts after begin_picture clears them.
+    video.begin_picture();
+    video.paint(&line);
+    assert_eq!(video.contacts, contacts);
+    assert_eq!(video.frame.pixels, pixels);
+    line.player_visible = false;
+    line.objects[1].x = 80;
+    video.begin_picture();
+    video.paint(&line);
+    assert_eq!(video.contacts, Contacts::default());
+    assert_eq!(video.frame.pixels[84], line.objects[1].color);
+    video.begin_picture();
+    video.paint(&line);
+    assert_eq!(video.contacts, Contacts::default());
+}
+
+#[test]
 fn complete_lines_preserve_hidden_contacts_and_wide_seam_geometry() {
     let mut video = Video::default();
     let mut line = Scanline {

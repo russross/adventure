@@ -3,13 +3,14 @@
 .DELETE_ON_ERROR:
 .PHONY: all original gameplay analysis verify lint check rust rust-release rust-check run rust-smoke
 .PHONY: refactored refactored-release refactored-check refactored-run refactored-smoke
+.PHONY: translation translation-release translation-check translation-run translation-smoke
 .PHONY: trace-check validator validator-check validate mostlyclean clean
 DASM ?= .tools/dasm
 PYTHON ?= python3
 UV ?= uv
 CARGO ?= cargo
 
-all: original rust refactored validator
+all: original rust translation validator
 
 original:
 	$(MAKE) -C original all DASM="$(abspath $(DASM))" PYTHON="$(PYTHON)"
@@ -24,21 +25,32 @@ gameplay analysis verify:
 lint:
 	$(MAKE) -C original lint UV="$(UV)"
 
-check: lint trace-check rust-check refactored-check validator-check verify
+check: lint trace-check rust-check translation-check validator-check verify
 
-rust:
+rust: refactored
+
+rust-release: refactored-release
+
+rust-check: refactored-check
+
+run: refactored-run
+
+rust-smoke: refactored-smoke
+
+# The preserved translation remains available through explicit implementation targets.
+translation:
 	$(MAKE) -C translation all CARGO="$(CARGO)"
 
-rust-release:
+translation-release:
 	$(MAKE) -C translation release CARGO="$(CARGO)"
 
-rust-check:
+translation-check:
 	$(MAKE) -C translation check CARGO="$(CARGO)" TEST_ARGS="$(TEST_ARGS)"
 
-run: rust-release
-	translation/target/release/adventure $(ARGS)
+translation-run:
+	$(MAKE) -C translation run CARGO="$(CARGO)" ARGS="$(ARGS)"
 
-rust-smoke:
+translation-smoke:
 	$(MAKE) -C translation smoke CARGO="$(CARGO)"
 
 refactored:

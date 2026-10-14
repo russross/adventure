@@ -1,6 +1,162 @@
 use super::*;
 
 #[test]
+fn delta_uploads_reconstruct_complete_rgb_across_frame_changes() {
+    let mut pixels = vec![0; WIDTH * HEIGHT];
+    let mut output = TexturePixels::new(&[]).unwrap();
+    output.bytes.fill(255);
+    assert_eq!(output.convert_changed_rows(&pixels, None), [(0, HEIGHT)]);
+    assert!(output.bytes.iter().all(|byte| *byte == 0));
+    let previous = pixels.clone();
+    assert!(
+        output
+            .convert_changed_rows(&pixels, Some(&previous))
+            .is_empty()
+    );
+
+    // Adjacent changes coalesce; separated and final rows retain their own spans.
+    for row in [0, 1, 15, HEIGHT - 1] {
+        pixels[row * WIDTH + WIDTH - 1] = 28;
+    }
+    assert_eq!(
+        output.convert_changed_rows(&pixels, Some(&previous)),
+        [(0, 2), (15, 16), (HEIGHT - 1, HEIGHT)]
+    );
+    let expected: Vec<u8> = pixels.iter().flat_map(|color| rgb_color(*color)).collect();
+    assert_eq!(output.bytes, expected);
+
+    // A room-wide palette change and subsequent erasure replace all retained colors.
+    let previous = pixels.clone();
+    pixels.fill(72);
+    assert_eq!(
+        output.convert_changed_rows(&pixels, Some(&previous)),
+        [(0, HEIGHT)]
+    );
+    assert_eq!(
+        output.bytes,
+        pixels
+            .iter()
+            .flat_map(|color| rgb_color(*color))
+            .collect::<Vec<_>>()
+    );
+    let previous = pixels.clone();
+    pixels.fill(0);
+    output.convert_changed_rows(&pixels, Some(&previous));
+    assert!(output.bytes.iter().all(|byte| *byte == 0));
+}
+
+#[test]
+fn packed_texture_formats_preserve_every_palette_color_and_snapshot() {
+    let pixels: Vec<u8> = (0..WIDTH * HEIGHT).map(|index| index as u8).collect();
+    let expected: Vec<u8> = pixels.iter().flat_map(|color| rgb_color(*color)).collect();
+    for format in [
+        PixelFormatEnum::ARGB8888,
+        PixelFormatEnum::ABGR8888,
+        PixelFormatEnum::RGBA8888,
+        PixelFormatEnum::BGRA8888,
+        PixelFormatEnum::RGB888,
+        PixelFormatEnum::BGR888,
+        PixelFormatEnum::RGB24,
+    ] {
+        let mut output = TexturePixels::new(&[PixelFormatEnum::YV12, format]).unwrap();
+        assert_eq!(output.format, format);
+        output.convert_changed_rows(&pixels, None);
+        let pitch = output.pitch() as u32;
+        let surface = Surface::from_data(
+            &mut output.bytes,
+            WIDTH as u32,
+            HEIGHT as u32,
+            pitch,
+            format,
+        )
+        .unwrap();
+        let rgb = surface.convert_format(PixelFormatEnum::RGB24).unwrap();
+        // SDL performs an independent format conversion, as snapshot readers do.
+        assert_eq!(rgb.without_lock().unwrap(), expected);
+    }
+}
+
+#[test]
+#[ignore = "requires an SDL video and audio driver; run with dummy drivers in headless environments"]
+fn sdl_idle_redraws_resets_uploads_and_frame_boundaries() {
+    let mut hardware = SdlHardware::new(false, Some(12)).unwrap();
+    let sound = Sound::default();
+    let mut frame = Frame::default();
+    hardware.present(&frame, &sound).unwrap();
+    hardware.sample_controls().unwrap();
+    let initial = hardware.redraws;
+    hardware.present(&frame, &sound).unwrap();
+    let settled = hardware.redraws;
+    hardware.present(&frame, &sound).unwrap();
+    assert_eq!(hardware.redraws, settled);
+    assert!(settled >= initial);
+    assert_eq!(hardware.frames, 3);
+    assert!(hardware.audio.lock().idle());
+    assert_eq!(hardware.audio.status(), sdl2::audio::AudioStatus::Paused);
+
+    // Real SDL events force repainting even while the indexed picture is retained.
+    let events = hardware._sdl.event().unwrap();
+    for win_event in [
+        WindowEvent::Exposed,
+        WindowEvent::SizeChanged(640, 388),
+        WindowEvent::Restored,
+    ] {
+        events
+            .push_event(Event::Window {
+                timestamp: 0,
+                window_id: hardware.canvas.window().id(),
+                win_event,
+            })
+            .unwrap();
+        let redraws = hardware.redraws;
+        hardware.present(&frame, &sound).unwrap();
+        assert_eq!(hardware.redraws, redraws + 1);
+    }
+    for event in [
+        Event::RenderTargetsReset { timestamp: 0 },
+        Event::RenderDeviceReset { timestamp: 0 },
+    ] {
+        // The Rust binding cannot enqueue renderer-reset events; use the same observer.
+        hardware.refresh.observe(&event);
+        let redraws = hardware.redraws;
+        hardware.present(&frame, &sound).unwrap();
+        assert_eq!(hardware.redraws, redraws + 1);
+        assert_eq!(hardware.indexed.as_deref(), Some(frame.pixels.as_slice()));
+    }
+
+    // Verify actual uploaded texture colors before presentation invalidates the backbuffer.
+    frame.pixels.fill(72);
+    frame.pixels[WIDTH + 159] = 28;
+    hardware.present(&frame, &sound).unwrap();
+    hardware
+        .canvas
+        .window_mut()
+        .set_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+        .unwrap();
+    hardware.sample_controls().unwrap();
+    hardware.canvas.clear();
+    hardware.canvas.copy(&hardware.texture, None, None).unwrap();
+    let rgb = hardware
+        .canvas
+        .read_pixels(None, PixelFormatEnum::RGB24)
+        .unwrap();
+    let expected: Vec<u8> = frame
+        .pixels
+        .iter()
+        .flat_map(|color| {
+            let rgb = rgb_color(*color);
+            [rgb, rgb].concat()
+        })
+        .collect();
+    assert_eq!(rgb, expected);
+    while hardware.frames < 12 {
+        assert!(hardware.present(&frame, &sound).unwrap().is_some());
+    }
+    assert!(hardware.present(&frame, &sound).unwrap().is_none());
+    assert_eq!(hardware.frames, 12);
+}
+
+#[test]
 fn stella_controls_and_aliases_remain_independent() {
     let mut keyboard = KeyboardConsole::default();
     for key in [
@@ -33,4 +189,47 @@ fn stella_controls_and_aliases_remain_independent() {
     assert_eq!(keyboard.sample().left_difficulty, Difficulty::B);
     assert_eq!(keyboard.sample().right_difficulty, Difficulty::B);
     assert!(keyboard.sample().color);
+}
+
+// Exercise the real callback while leaving graphics idle. Manual callback reads
+// under SDL's lock make completion deterministic without depending on wall time.
+#[test]
+#[ignore = "requires an SDL video and audio driver; run with dummy drivers in headless environments"]
+fn sdl_cached_audio_resumes_and_pauses_after_release() {
+    use crate::sound::{EffectCadence, SoundEffect};
+    use sdl2::audio::AudioStatus;
+
+    let mut hardware = SdlHardware::new(false, None).unwrap();
+    let frame = Frame::default();
+    let mut sound = Sound::default();
+    hardware.present(&frame, &sound).unwrap();
+    assert_eq!(hardware.audio.status(), AudioStatus::Paused);
+    sound.effect(SoundEffect::Pickup, 3, EffectCadence::EveryTurn);
+    hardware.present(&frame, &sound).unwrap();
+    assert_eq!(hardware.audio.status(), AudioStatus::Playing);
+    let mut output = [0.0; 800];
+    hardware.audio.lock().render(&mut output);
+    assert!(output.iter().any(|sample| sample.abs() > 0.001));
+
+    sound.silence();
+    hardware.present(&frame, &sound).unwrap();
+    hardware.audio.lock().render(&mut output);
+    assert!(output[96..].iter().all(|sample| *sample == 0.0));
+    hardware.present(&frame, &sound).unwrap();
+    assert_eq!(hardware.audio.status(), AudioStatus::Paused);
+
+    // Muting releases playback; unmuting seeks the latest step rather than
+    // replaying the effect from the position retained before the mute shortcut.
+    sound.effect(SoundEffect::Roar, 15, EffectCadence::EveryTurn);
+    hardware.present(&frame, &sound).unwrap();
+    hardware.audio.lock().render(&mut output);
+    hardware.muted = true;
+    hardware.present(&frame, &sound).unwrap();
+    hardware.audio.lock().render(&mut output);
+    hardware.present(&frame, &sound).unwrap();
+    assert_eq!(hardware.audio.status(), AudioStatus::Paused);
+    sound.effect(SoundEffect::Roar, 10, EffectCadence::EveryTurn);
+    hardware.muted = false;
+    hardware.present(&frame, &sound).unwrap();
+    assert_eq!(hardware.audio.status(), AudioStatus::Playing);
 }

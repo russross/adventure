@@ -2,7 +2,7 @@
 .NOTPARALLEL:
 .DEFAULT_GOAL := all
 .DELETE_ON_ERROR:
-.PHONY: all release run format fmt lint check smoke mostlyclean clean
+.PHONY: all release run flamegraph format fmt lint check smoke mostlyclean clean
 CARGO ?= cargo
 DASM ?= $(abspath ../.tools/dasm)
 export CARGO_TARGET_DIR := $(abspath ../target/refactored)
@@ -19,6 +19,10 @@ release: Cargo.lock
 
 run: release
 	cd .. && $(CARGO_TARGET_DIR)/release/refactored $(ARGS)
+
+# Keep release optimization while including full symbols for profiling stacks.
+flamegraph: Cargo.lock
+	CARGO_PROFILE_RELEASE_DEBUG=true $(CARGO) flamegraph --release --bin refactored $(FLAMEGRAPH_ARGS) -- $(ARGS)
 
 $(abspath ../.tools/dasm): ../original/Makefile
 	$(MAKE) -C .. .tools/dasm

@@ -3,7 +3,7 @@ Adventure Rust ports
 
 Run the refactored game:
 
-    make refactored-run
+    make run
 
 `translation/` keeps the Rust translation in ROM order. `refactored/` is an independent Rust implementation with all core game code and immutable data in `src/adventure.rs`, hardware modules directly in `src/`, and tests including the ROM oracle in `src/tests/`. Its hardware interface accepts complete scanlines instead of persistent drawable operations. Both versions retain line-by-line rendering, the three-picture gameplay cycle, and frame-boundary pacing.
 
@@ -34,7 +34,7 @@ For a bounded run or BMP capture:
 
 `--unpaced` disables frame pacing for automated runs. The normal host targets 60 presentations per second; scanline drawing never sleeps. `make -C refactored mostlyclean` preserves the release executable while removing intermediates. `make -C refactored clean` removes that executable as well.
 
-`make run`, `make rust-check`, and `make rust-smoke` build, check, and exercise the translation through its own Makefile. Both versions use calibrated object placement checked against an independent Stella capture.
+`make rust`, `make rust-release`, `make run`, `make rust-check`, and `make rust-smoke` default to the refactored implementation. The explicit `refactored-*` targets remain available. Use `make translation`, `make translation-release`, `make translation-run`, `make translation-check`, and `make translation-smoke` for the preserved translation. Both versions use calibrated object placement checked against an independent Stella capture.
 
 
 Record and validate a playthrough
@@ -43,7 +43,7 @@ Record and validate a playthrough
 Run these commands from the project root. Choose either version to record:
 
     make run ARGS='--record playthrough.trace'
-    make refactored-run ARGS='--record playthrough.trace'
+    make translation-run ARGS='--record playthrough.trace'
 
 Press Enter to start, play through to victory, then press Escape to finish the recording. The trace begins at boot and includes game selection, resets, consumed inputs, object changes, and observed collisions. Recording writes to the named file during play and flushes the final `end` record on normal exit. Use a different filename for each run; recording replaces an existing file.
 
@@ -56,7 +56,7 @@ This builds the headless validator, verifies the assembled cartridge's SHA-256, 
 To replay and verify the same trace against either Rust version without opening a window:
 
     make run ARGS='--replay playthrough.trace'
-    make refactored-run ARGS='--replay playthrough.trace'
+    make translation-run ARGS='--replay playthrough.trace'
 
 `make trace-check` checks the shared format and state machine. `make validator-check` checks ROM execution against generated translation traces. The format and observation contract are documented in [trace/SEMANTICS.md](trace/SEMANTICS.md).
 

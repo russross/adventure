@@ -2,7 +2,7 @@
 
 use crate::hardware::FrameHost;
 use crate::input::{Controls, Difficulty, Direction};
-use crate::sound::Sound;
+use crate::sound::{EffectCadence, Sound, SoundEffect};
 use crate::video::{Appearance, ObjectLine, PlayfieldRow, Scanline, SpriteWidth, Video, WIDTH};
 use adventure_trace::{Control, Point, Session};
 use std::cell::RefCell;
@@ -329,17 +329,6 @@ impl Gates {
             GateId::Black => self.black = value,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum SoundEffect {
-    #[default]
-    Victory,
-    Roar,
-    Swallow,
-    DragonSlain,
-    Drop,
-    Pickup,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1511,22 +1500,16 @@ impl Adventure {
         }
         self.world.sound_remaining = self.world.sound_remaining.wrapping_sub(1);
         let remaining = self.world.sound_remaining;
-        let (waveform, frequency, volume) = match self.world.sound_effect {
-            SoundEffect::Victory => {
-                self.display.appearance.foreground = remaining;
-                (remaining, remaining >> 3, remaining >> 1)
-            }
-            SoundEffect::Roar => (
-                if remaining & 1 != 0 { 3 } else { 8 },
-                (remaining >> 2).wrapping_add(28),
-                remaining,
-            ),
-            SoundEffect::Swallow => (6, remaining ^ 15, (remaining >> 1).wrapping_add(8)),
-            SoundEffect::DragonSlain => (4, remaining ^ 31, remaining),
-            SoundEffect::Drop => (6, remaining ^ 3, 5),
-            SoundEffect::Pickup => (6, remaining, 5),
+        if self.world.sound_effect == SoundEffect::Victory {
+            self.display.appearance.foreground = remaining;
+        }
+        let cadence = if self.world.won {
+            EffectCadence::EveryPicture
+        } else {
+            EffectCadence::EveryTurn
         };
-        self.sound.voice(waveform, frequency, volume);
+        self.sound
+            .effect(self.world.sound_effect, remaining, cadence);
     }
 }
 

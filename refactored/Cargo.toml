@@ -14,7 +14,7 @@ path = "src/tests/sdl_smoke.rs"
 
 [dependencies]
 adventure-trace = { path = "../trace" }
-sdl2 = { version = "0.38", features = ["use-pkgconfig"] }
+sdl2 = { version = "0.38", features = ["use-pkgconfig", "unsafe_textures"] }
 
 [dev-dependencies]
 adventure-port = { path = "../translation" }
