@@ -201,7 +201,7 @@ When more than three frames of audio remain queued, the host clears the backlog 
 Rust build and validation
 -------------------------
 
-Rust source resides in `directport/`, `scanline/`, `rawemulator/`, and `trace/`. The root Cargo workspace shares dependency versions, one root lockfile, and `target/`. Plain `make` builds all workspace release binaries; `make directport-run` and `make scanline-run` use Cargo to build and run the selected release binary. Each cartridge consumer embeds bytes through its crate-local `adventure.bin` symlink to `rom/adventure.bin`; no Rust build requires generated assembly output. Component Makefiles forward to the root rules. Checks run formatting, Clippy with warnings as errors, then tests. Smoke captures reside in `target/`. `mostlyclean` preserves release executables while removing shared compiler intermediates and generated captures; `clean` also removes deployment outputs. Neither target changes source, ROM input, configuration, or persistent user data.
+Rust source resides in `directport/`, `scanline/`, `frame/`, `rawemulator/`, and `trace/`. The root Cargo workspace shares dependency versions, one root lockfile, and `target/`. Plain `make` builds all workspace release binaries; `make directport-run` and `make scanline-run` use Cargo to build and run the selected release binary. Each cartridge consumer embeds bytes through its crate-local `adventure.bin` symlink to `rom/adventure.bin`; no Rust build requires generated assembly output. Component Makefiles forward to the root rules. Checks run formatting, Clippy with warnings as errors, then tests. Smoke captures reside in `target/`. `mostlyclean` preserves release executables while removing shared compiler intermediates and generated captures; `clean` also removes deployment outputs. Neither target changes source, ROM input, configuration, or persistent user data.
 
 The test-only `src/rom_oracle.rs` executes the supplied original ROM with ordinary call continuations. It is compiled only for tests. Test serialization maps named fields to the original RAM layout solely for comparison; the running port does not use that map or the ROM file. Comparisons retain meaningful direction bits and button histories while excluding discarded pointer/scratch bytes and unused direction bits.
 
@@ -230,3 +230,15 @@ Frame implementation
 --------------------
 
 `frame/` follows all gameplay, input, presentation, audio, coordinate, and collision contracts above. It prepares a complete picture and composes whole layers instead of sending scanlines to video. Separate geometric coverage preserves collision contacts even when higher-priority colors hide objects. The exact picture preparation and composition workflow is specified in [frame/SEMANTICS.md](frame/SEMANTICS.md). `scanline/` remains unchanged.
+
+
+Python port
+-----------
+
+`py/` contains an independent, readable Python port of the refactored game without trace, replay, or test infrastructure. `make -C py run` installs its locked pygame-ce dependency with uv and starts the game. Its world, picture scheduling, collision, display, and audio flows are documented in [py/SEMANTICS.md](py/SEMANTICS.md). `make -C py check` runs Ruff formatting/lint and ty. Cleanup belongs to `py/Makefile`; the root aggregate build/check targets continue to cover the existing implementations.
+
+
+Scanline host specialization
+----------------------------
+
+The scanline host retains row composition and texture data, skips unchanged uploads and presentations, and plays cached sound effects through an SDL callback. The queued-audio and unconditional presentation flows above describe the preserved directport and frame hosts. The scanline cache invalidation, effect scheduling, callback transitions, mute behavior, and validation contracts are specified in [scanline/SEMANTICS.md](scanline/SEMANTICS.md). `make run`, `make rust`, `make rust-release`, `make rust-check`, and `make rust-smoke` select scanline; `translation` and `translation-*` select directport. `make -C scanline flamegraph` forwards to the workspace profiling target, with game arguments in `ARGS` and profiler options in `FLAMEGRAPH_ARGS`.

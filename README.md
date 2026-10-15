@@ -3,7 +3,9 @@ Adventure Rust ports
 
 Run the refactored game:
 
-    make scanline-run
+    make run
+
+Run the Python port with `make -C py run`; see [py/README.md](py/README.md). `make run`, `make rust-check`, and `make rust-smoke` select `scanline`; `translation-*` aliases select `directport`.
 
 `directport/` keeps the Rust translation in ROM order. `scanline/` is an independent Rust implementation with all core game code and immutable data in `src/adventure.rs`, hardware modules directly in `src/`, and tests including the ROM oracle in `src/tests/`. Its hardware interface accepts complete scanlines instead of persistent drawable operations. Both versions retain line-by-line rendering, the three-picture gameplay cycle, and frame-boundary pacing.
 

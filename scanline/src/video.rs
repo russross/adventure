@@ -38,14 +38,14 @@ impl PlayfieldRow {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SpriteWidth {
     #[default]
     Normal,
     Wide,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObjectLine {
     pub x: u8,
     pub color: u8,
@@ -65,7 +65,7 @@ impl ObjectLine {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Appearance {
     pub background: u8,
     pub foreground: u8,
@@ -75,7 +75,7 @@ pub struct Appearance {
     pub barriers: [bool; 2],
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Scanline {
     pub appearance: Appearance,
     pub walls: PlayfieldRow,
@@ -106,10 +106,32 @@ impl Default for Frame {
     }
 }
 
-#[derive(Default)]
 pub struct Video {
     pub frame: Frame,
     pub contacts: Contacts,
+    lines: [Option<(Scanline, Contacts)>; HEIGHT],
+}
+
+impl Default for Video {
+    fn default() -> Self {
+        Self {
+            frame: Frame::default(),
+            contacts: Contacts::default(),
+            lines: [None; HEIGHT],
+        }
+    }
+}
+
+impl Contacts {
+    // Every row contributes its geometry, including rows whose pixels were retained.
+    fn accumulate(&mut self, row: Self) {
+        self.player_walls |= row.player_walls;
+        for slot in 0..2 {
+            self.player_barriers[slot] |= row.player_barriers[slot];
+            self.player_objects[slot] |= row.player_objects[slot];
+        }
+        self.objects_touch |= row.objects_touch;
+    }
 }
 
 impl Video {
@@ -122,6 +144,27 @@ impl Video {
     pub fn paint(&mut self, line: &Scanline) {
         let row = self.frame.painted_lines;
         assert!(row < HEIGHT, "picture exceeds its scanline budget");
+        // Positions of absent layers cannot affect pixels or contacts. Ignore them so
+        // moving a sprite invalidates only rows containing its old or new artwork.
+        let mut drawable = *line;
+        if !drawable.player_visible {
+            drawable.player_x = 0;
+        }
+        for object in &mut drawable.objects {
+            if object.bits == 0 {
+                object.x = 0;
+            }
+        }
+        if let Some((previous, contacts)) = self.lines[row]
+            && previous == drawable
+        {
+            self.contacts.accumulate(contacts);
+            self.frame.painted_lines += 1;
+            return;
+        }
+
+        // Changed inputs replace both the indexed row and its independent contact contribution.
+        let mut contacts = Contacts::default();
         let appearance = line.appearance;
         for x in 0..WIDTH {
             let walls = line.walls.covers(x, appearance.mirrored);
@@ -130,12 +173,12 @@ impl Video {
             let second = line.objects[1].covers(x);
             let left = appearance.barriers[0] && solid(x, 11, 2);
             let right = appearance.barriers[1] && solid(x, 148, 2);
-            self.contacts.player_walls |= player && walls;
-            self.contacts.player_barriers[0] |= player && left;
-            self.contacts.player_barriers[1] |= player && right;
-            self.contacts.player_objects[0] |= player && first;
-            self.contacts.player_objects[1] |= player && second;
-            self.contacts.objects_touch |= first && second;
+            contacts.player_walls |= player && walls;
+            contacts.player_barriers[0] |= player && left;
+            contacts.player_barriers[1] |= player && right;
+            contacts.player_objects[0] |= player && first;
+            contacts.player_objects[1] |= player && second;
+            contacts.objects_touch |= first && second;
 
             // Walls and the player share a color; each barrier shares its object's color.
             let foreground = walls || player;
@@ -151,6 +194,8 @@ impl Video {
                 appearance.background
             };
         }
+        self.lines[row] = Some((drawable, contacts));
+        self.contacts.accumulate(contacts);
         self.frame.painted_lines += 1;
     }
 }

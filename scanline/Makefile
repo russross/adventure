@@ -32,3 +32,7 @@ run:
 smoke:
 	$(MAKE) -C .. scanline-smoke
 
+
+.PHONY: flamegraph
+flamegraph:
+	$(MAKE) -C .. scanline-flamegraph

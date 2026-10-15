@@ -14,7 +14,7 @@ path = "src/tests/sdl_smoke.rs"
 
 [dependencies]
 adventure-trace.workspace = true
-sdl2.workspace = true
+sdl2 = { workspace = true, features = ["unsafe_textures"] }
 
 [dev-dependencies]
 directport.workspace = true

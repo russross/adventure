@@ -3,6 +3,80 @@
 use std::f32::consts::TAU;
 use std::num::NonZeroU32;
 
+// Effects describe the game's finite envelopes; cadence follows the picture scheduler.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SoundEffect {
+    #[default]
+    Victory,
+    Roar,
+    Swallow,
+    DragonSlain,
+    Drop,
+    Pickup,
+}
+
+impl SoundEffect {
+    const ALL: [Self; 6] = [
+        Self::Victory,
+        Self::Roar,
+        Self::Swallow,
+        Self::DragonSlain,
+        Self::Drop,
+        Self::Pickup,
+    ];
+
+    fn duration(self) -> u8 {
+        match self {
+            Self::Victory => 255,
+            Self::Roar | Self::Swallow | Self::DragonSlain => 16,
+            Self::Drop | Self::Pickup => 4,
+        }
+    }
+
+    // Register widths apply after the envelope calculation, as in the cartridge.
+    fn channel(self, remaining: u8) -> Channel {
+        let (waveform, frequency, volume) = match self {
+            Self::Victory => (remaining, remaining >> 3, remaining >> 1),
+            Self::Roar => (
+                if remaining & 1 != 0 { 3 } else { 8 },
+                (remaining >> 2).wrapping_add(28),
+                remaining,
+            ),
+            Self::Swallow => (6, remaining ^ 15, (remaining >> 1).wrapping_add(8)),
+            Self::DragonSlain => (4, remaining ^ 31, remaining),
+            Self::Drop => (6, remaining ^ 3, 5),
+            Self::Pickup => (6, remaining, 5),
+        };
+        Channel {
+            waveform: waveform & 15,
+            frequency: frequency & 31,
+            volume: volume & 15,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EffectCadence {
+    EveryPicture,
+    EveryTurn,
+}
+
+impl EffectCadence {
+    fn pictures(self) -> usize {
+        match self {
+            Self::EveryPicture => 1,
+            Self::EveryTurn => 3,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EffectStep {
+    effect: SoundEffect,
+    remaining: u8,
+    cadence: EffectCadence,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Channel {
     pub waveform: u8,
@@ -13,6 +87,8 @@ pub struct Channel {
 #[derive(Default)]
 pub struct Sound {
     pub channels: [Channel; 2],
+    step: Option<EffectStep>,
+    revision: u64,
 }
 
 impl Sound {
@@ -29,6 +105,20 @@ impl Sound {
         for channel in &mut self.channels {
             channel.volume = 0;
         }
+        if self.step.take().is_some() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    // Every envelope update is observable, including consecutive identical restarts.
+    pub(crate) fn effect(&mut self, effect: SoundEffect, remaining: u8, cadence: EffectCadence) {
+        self.channels[0] = effect.channel(remaining);
+        self.step = Some(EffectStep {
+            effect,
+            remaining,
+            cadence,
+        });
+        self.revision = self.revision.wrapping_add(1);
     }
 }
 
@@ -153,6 +243,174 @@ impl Synthesizer {
             self.previous_input = input;
             self.previous_output = output;
             *sample = output;
+        }
+    }
+}
+
+// Each cached envelope retains phase internally. Different effects use independent
+// starting states so playback needs only a clip cursor, not a running TIA circuit.
+struct EffectClip {
+    samples: Vec<f32>,
+    offsets: Vec<usize>,
+}
+
+impl EffectClip {
+    fn new(effect: SoundEffect, cadence: EffectCadence, rate: NonZeroU32) -> Self {
+        let mut synthesizer = Synthesizer::new(rate);
+        let mut sound = Sound::default();
+        let mut samples = Vec::new();
+        let mut offsets = vec![0; usize::from(effect.duration())];
+        for (step, remaining) in (0..effect.duration()).rev().enumerate() {
+            offsets[usize::from(remaining)] = samples.len();
+            sound.channels[0] = effect.channel(remaining);
+            let end = (step + 1) * cadence.pictures() * rate.get() as usize / 60;
+            let start = samples.len();
+            samples.resize(end, 0.0);
+            synthesizer.render(&sound, &mut samples[start..]);
+        }
+
+        // Preserve the DC filter's release, then taper its quiet endpoint to zero.
+        let start = samples.len();
+        let tail = (rate.get() as usize / 40).max(1);
+        samples.resize(start + tail, 0.0);
+        sound.silence();
+        synthesizer.render(&sound, &mut samples[start..]);
+        for (index, sample) in samples[start..].iter_mut().enumerate() {
+            *sample *= (tail - index - 1) as f32 / tail as f32;
+        }
+        Self { samples, offsets }
+    }
+}
+
+struct SoundBank {
+    clips: [[EffectClip; 2]; 6],
+}
+
+impl SoundBank {
+    fn new(rate: NonZeroU32) -> Self {
+        Self {
+            clips: SoundEffect::ALL.map(|effect| {
+                [EffectCadence::EveryPicture, EffectCadence::EveryTurn]
+                    .map(|cadence| EffectClip::new(effect, cadence, rate))
+            }),
+        }
+    }
+
+    fn clip(&self, step: EffectStep) -> &EffectClip {
+        let cadence = match step.cadence {
+            EffectCadence::EveryPicture => 0,
+            EffectCadence::EveryTurn => 1,
+        };
+        &self.clips[step.effect as usize][cadence]
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ClipCursor {
+    step: EffectStep,
+    position: usize,
+}
+
+// The audio thread only reads cached PCM. Main-thread commands retain the game's
+// update boundaries; successive steps continue playback without restarting phase.
+pub(crate) struct EffectPlayer {
+    bank: SoundBank,
+    cursor: Option<ClipCursor>,
+    observed: Option<(u64, Option<EffectStep>)>,
+    transition_samples: usize,
+    transition_left: usize,
+    transition_origin: f32,
+    last_output: f32,
+}
+
+impl EffectPlayer {
+    pub(crate) fn new(rate: NonZeroU32) -> Self {
+        Self {
+            bank: SoundBank::new(rate),
+            cursor: None,
+            observed: None,
+            transition_samples: (rate.get() as usize / 500).max(2),
+            transition_left: 0,
+            transition_origin: 0.0,
+            last_output: 0.0,
+        }
+    }
+
+    pub(crate) fn update(&mut self, sound: &Sound, muted: bool) {
+        if muted {
+            if self.observed.take().is_some() {
+                self.transition(None);
+            }
+            return;
+        }
+        if self
+            .observed
+            .is_some_and(|(revision, _)| revision == sound.revision)
+        {
+            return;
+        }
+        let previous = self.observed.and_then(|(_, step)| step);
+        self.observed = Some((sound.revision, sound.step));
+        let continuing = previous.zip(sound.step).is_some_and(|(old, new)| {
+            old.effect == new.effect
+                && old.cadence == new.cadence
+                && old.remaining.checked_sub(1) == Some(new.remaining)
+        });
+        if continuing {
+            return;
+        }
+
+        // Seek only for starts, interruptions, or cadence changes. Muting discards
+        // the observed command so unmuting resumes at the current envelope step.
+        let cursor = sound.step.and_then(|step| {
+            self.bank
+                .clip(step)
+                .offsets
+                .get(usize::from(step.remaining))
+                .map(|&position| ClipCursor { step, position })
+        });
+        self.transition(cursor);
+    }
+
+    fn transition(&mut self, cursor: Option<ClipCursor>) {
+        if self.cursor.is_none() && cursor.is_none() && self.last_output == 0.0 {
+            return;
+        }
+        self.cursor = cursor;
+        self.transition_origin = self.last_output;
+        self.transition_left = self.transition_samples;
+    }
+
+    pub(crate) fn idle(&self) -> bool {
+        self.cursor.is_none() && self.transition_left == 0
+    }
+
+    pub(crate) fn render(&mut self, output: &mut [f32]) {
+        for sample in output {
+            let raw = if let Some(cursor) = &mut self.cursor {
+                let clip = self.bank.clip(cursor.step);
+                let value = clip.samples[cursor.position];
+                cursor.position += 1;
+                if cursor.position == clip.samples.len() {
+                    self.cursor = None;
+                }
+                value
+            } else {
+                0.0
+            };
+
+            // A two-millisecond ramp starts at the last delivered value. This
+            // also handles interruption during a ramp without a new amplitude jump.
+            let value = if self.transition_left != 0 {
+                let weight =
+                    (self.transition_left - 1) as f32 / (self.transition_samples - 1) as f32;
+                self.transition_left -= 1;
+                self.transition_origin * weight + raw * (1.0 - weight)
+            } else {
+                raw
+            };
+            self.last_output = value;
+            *sample = value;
         }
     }
 }

@@ -147,3 +147,114 @@ fn silence_dc_removal_volume_and_channel_mixing() {
         );
     }
 }
+
+// Cached envelopes use the reference circuit continuously within each effect,
+// including fractional sample boundaries at rates not divisible by sixty.
+#[test]
+fn cached_effects_match_continuous_synthesis_and_release_to_zero() {
+    for rate in [48_000, 44_101] {
+        let rate = NonZeroU32::new(rate).unwrap();
+        let bank = SoundBank::new(rate);
+        for effect in SoundEffect::ALL {
+            for cadence in [EffectCadence::EveryPicture, EffectCadence::EveryTurn] {
+                let clip = bank.clip(EffectStep {
+                    effect,
+                    remaining: 0,
+                    cadence,
+                });
+                let mut synth = Synthesizer::new(rate);
+                let mut sound = Sound::default();
+                for (step, remaining) in (0..effect.duration()).rev().enumerate() {
+                    sound.channels[0] = effect.channel(remaining);
+                    let start = clip.offsets[usize::from(remaining)];
+                    let end = (step + 1) * cadence.pictures() * rate.get() as usize / 60;
+                    let mut expected = vec![0.0; end - start];
+                    synth.render(&sound, &mut expected);
+                    assert_eq!(
+                        &clip.samples[start..end],
+                        expected,
+                        "{effect:?} {cadence:?}"
+                    );
+                }
+                assert!(clip.samples.iter().any(|sample| sample.abs() > 0.001));
+                assert!(
+                    clip.samples
+                        .iter()
+                        .all(|sample| sample.is_finite() && sample.abs() < 1.0)
+                );
+                assert_eq!(clip.samples.last(), Some(&0.0));
+            }
+        }
+    }
+}
+
+// All replacement pairs include restarting the same effect. Interrupted ramps
+// must start at the actual last output rather than the previous clip's amplitude.
+#[test]
+fn replacements_restarts_and_silence_have_continuous_ramps() {
+    let mut player = EffectPlayer::new(NonZeroU32::new(48_000).unwrap());
+    let mut sound = Sound::default();
+    for first in SoundEffect::ALL {
+        for second in SoundEffect::ALL {
+            sound.effect(first, first.duration() - 1, EffectCadence::EveryTurn);
+            player.update(&sound, false);
+            player.render(&mut [0.0; 137]);
+            let previous = player.last_output;
+            sound.effect(second, second.duration() - 1, EffectCadence::EveryTurn);
+            player.update(&sound, false);
+            let mut ramp = vec![0.0; player.transition_samples];
+            player.render(&mut ramp);
+            assert_eq!(ramp[0], previous, "{first:?} -> {second:?}");
+            let clip = player.bank.clip(sound.step.unwrap());
+            assert_eq!(ramp.last(), clip.samples.get(player.transition_samples - 1));
+
+            // Silence arriving midway through a restart finishes at exact zero.
+            sound.effect(second, second.duration() - 1, EffectCadence::EveryTurn);
+            player.update(&sound, false);
+            player.render(&mut [0.0; 17]);
+            let previous = player.last_output;
+            sound.silence();
+            player.update(&sound, false);
+            player.render(&mut ramp);
+            assert_eq!(ramp[0], previous);
+            assert_eq!(ramp.last(), Some(&0.0));
+            assert!(player.idle());
+        }
+    }
+}
+
+#[test]
+fn envelope_steps_continue_and_mute_resumes_current_step() {
+    let mut player = EffectPlayer::new(NonZeroU32::new(48_000).unwrap());
+    let mut sound = Sound::default();
+    sound.effect(SoundEffect::Roar, 15, EffectCadence::EveryTurn);
+    player.update(&sound, false);
+    player.render(&mut [0.0; 2400]);
+    sound.effect(SoundEffect::Roar, 14, EffectCadence::EveryTurn);
+    player.update(&sound, false);
+    assert_eq!(player.cursor.unwrap().position, 2400);
+    assert_eq!(player.transition_left, 0);
+    // Presenting a retained command must not restart the clip or its transition.
+    player.render(&mut [0.0; 101]);
+    player.update(&sound, false);
+    assert_eq!(player.cursor.unwrap().position, 2501);
+
+    player.update(&sound, true);
+    player.render(&mut [0.0; 96]);
+    assert!(player.idle());
+    sound.effect(SoundEffect::Roar, 10, EffectCadence::EveryTurn);
+    player.update(&sound, true);
+    assert!(player.idle());
+    player.update(&sound, false);
+    assert_eq!(player.cursor.unwrap().position, 5 * 2400);
+    assert_eq!(player.transition_left, 96);
+
+    // A faster scheduler changes the clip and seeks the current envelope step.
+    sound.effect(SoundEffect::Roar, 9, EffectCadence::EveryPicture);
+    player.update(&sound, false);
+    assert_eq!(player.cursor.unwrap().position, 6 * 800);
+    let mut output = vec![1.0; 48_000];
+    player.render(&mut output);
+    assert!(player.idle());
+    assert!(output[10_000..].iter().all(|sample| *sample == 0.0));
+}

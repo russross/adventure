@@ -69,3 +69,17 @@ mostlyclean:
 clean: mostlyclean
 	$(CARGO) clean
 	$(ROM_MAKE) -C rom clean
+
+# Default play and legacy implementation names follow the workspace packages.
+.PHONY: run rust rust-release rust-check rust-smoke translation translation-release translation-run translation-check translation-smoke scanline-flamegraph
+run: scanline-run
+rust rust-release: scanline
+rust-check: scanline-check
+rust-smoke: scanline-smoke
+translation translation-release: directport
+translation-run: directport-run
+translation-check: directport-check
+translation-smoke: directport-smoke
+
+scanline-flamegraph: Cargo.lock
+	CARGO_PROFILE_RELEASE_DEBUG=true $(CARGO) flamegraph --release -p scanline --bin scanline $(FLAMEGRAPH_ARGS) -- $(ARGS)
