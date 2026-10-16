@@ -4,7 +4,7 @@ use port::sound::{AudioMode, EffectPlayer};
 use port::validation::Validation;
 use port::video::Frame;
 
-include!("../../tests/performance.rs");
+include!("../tests/performance.rs");
 
 fn create_sdl(cached: bool) -> Result<SdlHardware, String> {
     SdlHardware::with_audio_mode(

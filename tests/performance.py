@@ -51,6 +51,7 @@ def metadata(output: Path = OUTPUT) -> None:
     ]
     paths.extend(ROOT.glob("tests/performance.rs"))
     paths.extend((ROOT / "src").rglob("*.rs"))
+    paths.extend((ROOT / "examples").rglob("*.rs"))
     paths.extend((ROOT / "src").rglob("Cargo.toml"))
     for path in sorted(paths):
         sources[str(path.relative_to(ROOT))] = hashlib.sha256(

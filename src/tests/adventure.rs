@@ -579,7 +579,7 @@ fn reinitialization_preserves_retained_state_like_the_rom() {
 
 #[test]
 fn visible_selection_and_every_object_image_range_match_rom() {
-    let rom = include_bytes!("../../adventure.bin");
+    let rom = include_bytes!("../../rom/adventure.bin");
     for room in ROOM_IDS {
         let mut port = initialized(Game::Two);
         port.world.player.room = room;
@@ -1144,7 +1144,7 @@ fn initial_game_one_picture_matches_stella_pixels() {
     game.world.safe_player = game.world.player;
     game.prepare_room_display();
     game.draw_room();
-    let expected = include_bytes!("../../../tests/stella-game-one.pixels");
+    let expected = include_bytes!("../../tests/stella-game-one.pixels");
     assert_eq!(&game.video.frame.pixels[..expected.len()], expected);
 }
 

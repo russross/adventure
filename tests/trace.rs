@@ -8,7 +8,7 @@ use adventure::sound::{Channel, Sound};
 use adventure::video::Frame;
 use adventure_trace::Session;
 
-#[path = "../../tests/trace_fixture.rs"]
+#[path = "trace_fixture.rs"]
 pub mod fixture;
 
 #[test]

@@ -1,7 +1,40 @@
+[package]
+name = "adventure"
+version = "0.1.0"
+edition = "2024"
+default-run = "adventure"
+autotests = false
+
+[[bin]]
+name = "adventure"
+path = "src/main.rs"
+
+[[example]]
+name = "sdl_smoke"
+path = "src/tests/sdl_smoke.rs"
+
+[dependencies]
+adventure-trace.workspace = true
+sdl2 = { workspace = true, features = ["unsafe_textures"] }
+
+rawemulator = { path = "src/rawemulator" }
+
 [workspace]
-members = ["src", "src/rawemulator", "src/trace"]
+members = [".", "src/rawemulator", "src/trace"]
 resolver = "3"
 
 [workspace.dependencies]
 adventure-trace = { path = "src/trace" }
 sdl2 = { version = "0.38", features = ["use-pkgconfig"] }
+
+[[test]]
+name = "cli"
+path = "tests/cli.rs"
+
+[[test]]
+name = "recording"
+path = "tests/recording.rs"
+
+[[test]]
+name = "trace"
+path = "tests/trace.rs"
