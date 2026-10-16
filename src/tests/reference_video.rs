@@ -220,11 +220,20 @@ impl Tia {
 
     // Horizontal sync paints the accumulated line. Contacts accumulate even when a layer is hidden.
     pub fn horizontal_sync(&mut self) {
+        self.finish_line(WIDTH);
+    }
+
+    // A midline VBLANK write suppresses both color and collision latching after its delay.
+    pub fn finish_line(&mut self, visible_pixels: usize) {
         let line = self.frame.painted_lines;
         if line >= HEIGHT {
             return;
         }
         for x in 0..WIDTH {
+            if x >= visible_pixels {
+                self.frame.pixels[line * WIDTH + x] = 0;
+                continue;
+            }
             let walls = !self.blanked && self.walls.covers(x, self.mirrored);
             let player = !self.blanked && self.player.covers(x);
             let first = !self.blanked && self.first_object.covers(x);

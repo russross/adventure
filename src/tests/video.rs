@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn partial_row_blanking_removes_pixels_and_contacts_at_the_exact_edge() {
+    let mut picture = Picture::default();
+    picture.appearance.background = 8;
+    picture.appearance.player_width = 1;
+    picture.player_visible[HEIGHT - 1] = true;
+    picture.objects[0].rows[HEIGHT - 1] = 0xff;
+    picture.visible_widths[HEIGHT - 1] = 5;
+    picture.player_x = 4;
+    let mut video = Video::default();
+    video.paint(&picture);
+    assert!(video.contacts.player_objects[0]);
+    picture.player_x = 5;
+    video.paint(&picture);
+    assert!(!video.contacts.player_objects[0]);
+    assert!(
+        video.frame.pixels[(HEIGHT - 1) * WIDTH + 5..]
+            .iter()
+            .all(|pixel| *pixel == 0)
+    );
+    assert_eq!(video.frame.pixels, reference_picture(&picture).0);
+}
+
+#[test]
 fn moving_and_erasing_sprites_recomposes_only_affected_rows() {
     let mut picture = Picture::default();
     picture.objects[0].line.color = 72;
@@ -92,6 +115,7 @@ fn complete_objects_preserve_hidden_contacts_and_wide_seam_geometry() {
         }; 2],
         player_x: 159,
         player_visible: [true; HEIGHT],
+        visible_widths: [WIDTH as u8; HEIGHT],
     };
     video.paint(&picture);
     assert_eq!(video.contacts.player_objects, [true, true]);
@@ -146,6 +170,9 @@ fn reference_picture(picture: &Picture) -> (Vec<u8>, Contacts) {
     for (index, pixel) in pixels.iter_mut().enumerate() {
         let y = index / WIDTH;
         let x = index % WIDTH;
+        if x >= usize::from(picture.visible_widths[y]) {
+            continue;
+        }
         let relative =
             |origin: u8| (x as i16 - i16::from(origin)).rem_euclid(WIDTH as i16) as usize;
         let walls = picture.walls[y].covers(x, appearance.mirrored);

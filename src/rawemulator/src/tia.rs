@@ -5,6 +5,8 @@ pub struct Tia {
     positions: [i16; 5],
     delayed: u8,
     contacts: [u8; 8],
+    blanked: bool,
+    pending_blank: Option<bool>,
     pub cycles: u64,
 }
 impl Default for Tia {
@@ -14,6 +16,8 @@ impl Default for Tia {
             positions: [0; 5],
             delayed: 0,
             contacts: [0; 8],
+            blanked: false,
+            pending_blank: None,
             cycles: 0,
         }
     }
@@ -33,8 +37,13 @@ impl Tia {
     pub fn advance(&mut self, count: u64) {
         for _ in 0..count {
             let clock = (self.cycles % 76) as i16 * 3;
-            if self.registers[1] & 2 == 0 {
-                for x in clock - 68..clock - 65 {
+            for x in clock - 68..clock - 65 {
+                // VBLANK takes effect one color clock after its register write.
+                let blanked = self.blanked;
+                if let Some(next) = self.pending_blank.take() {
+                    self.blanked = next;
+                }
+                if !blanked {
                     if !(0..160).contains(&x) {
                         continue;
                     }
@@ -117,6 +126,7 @@ impl Tia {
         }
         self.registers[register] = value;
         match register {
+            1 => self.pending_blank = Some(value & 2 != 0),
             2 => {
                 let rest = (76 - self.cycles % 76) % 76;
                 self.advance(rest);
@@ -200,6 +210,21 @@ mod tests {
 #[cfg(test)]
 mod wide_tests {
     use super::Tia;
+
+    #[test]
+    fn vertical_blanking_keeps_one_final_color_clock_of_contacts() {
+        for x in [4, 5] {
+            let mut tia = Tia::default();
+            tia.positions[0] = x;
+            tia.positions[4] = x;
+            tia.write(0x1b, 0x80);
+            tia.write(0x1f, 2);
+            tia.cycles = 24;
+            tia.write(1, 2);
+            tia.advance(1);
+            assert_eq!(tia.contact(2) & 64 != 0, x == 4);
+        }
+    }
 
     // The independently captured wide-sprite seam places its first expanded pixel after the reset origin.
     #[test]

@@ -52,6 +52,7 @@ class Picture:
     objects: tuple[Object, Object]
     player_x: int
     player_visible: tuple[bool, ...]
+    visible_widths: tuple[int, ...] = (WIDTH,) * HEIGHT
 
 
 @dataclass(frozen=True)
@@ -76,26 +77,39 @@ class Video:
             return
         appearance = picture.appearance
         player_mask = solid(picture.player_x, appearance.player_width)
-        players = tuple(player_mask if visible else 0 for visible in picture.player_visible)
-        foreground = tuple(walls | player for walls, player in zip(picture.walls, players))
+        visibility = tuple((1 << width) - 1 for width in picture.visible_widths)
+        players = tuple(
+            player_mask & mask if visible else 0
+            for visible, mask in zip(picture.player_visible, visibility)
+        )
+        walls = tuple(wall & mask for wall, mask in zip(picture.walls, visibility))
+        foreground = tuple(wall | player for wall, player in zip(walls, players))
         self.pixels[:] = bytes([appearance.background]) * (WIDTH * HEIGHT)
         self.paint_layer(foreground, appearance.foreground)
 
         # Each object completes before the next; geometric contacts never depend on winning color.
         object_masks = tuple(
-            tuple(sprite(obj.x, bits, obj.scale) for bits in obj.rows) for obj in picture.objects
+            tuple(sprite(obj.x, bits, obj.scale) & mask for bits, mask in zip(obj.rows, visibility))
+            for obj in picture.objects
         )
         barriers = tuple(
             solid(x, 2) if enabled else 0 for x, enabled in zip((11, 148), appearance.barriers)
         )
         for slot in (1, 0):
-            masks = tuple(mask | barriers[slot] for mask in object_masks[slot])
+            masks = tuple(
+                mask | (barriers[slot] & visible)
+                for mask, visible in zip(object_masks[slot], visibility)
+            )
             if appearance.walls_in_front:
                 masks = tuple(mask & ~front for mask, front in zip(masks, foreground))
             self.paint_layer(masks, picture.objects[slot].color)
 
+        # Vertical blanking removes the rest of a partial row, including its background color.
+        for row, width in enumerate(picture.visible_widths):
+            self.pixels[row * WIDTH + width : (row + 1) * WIDTH] = bytes(WIDTH - width)
+
         self.contacts = Contacts(
-            any(player & wall for player, wall in zip(players, picture.walls)),
+            any(player & wall for player, wall in zip(players, walls)),
             (
                 any(player & barriers[0] for player in players),
                 any(player & barriers[1] for player in players),

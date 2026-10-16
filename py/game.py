@@ -698,6 +698,7 @@ class Adventure:
                 display.objects,
                 (positioned_x(self.world.player.x) - 1) % 160,
                 rows,
+                (160,) * 193 + (5,),
             )
         )
 

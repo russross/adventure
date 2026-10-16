@@ -103,7 +103,7 @@ impl Geometry {
                 }
                 mask
             });
-            GeometryRow {
+            let mut row = GeometryRow {
                 walls,
                 player: if picture.player_visible[y] {
                     player
@@ -112,7 +112,19 @@ impl Geometry {
                 },
                 objects,
                 barriers,
+            };
+            // Blanking removes geometry as well as color, so off-picture overlap cannot latch.
+            if usize::from(picture.visible_widths[y]) < WIDTH {
+                let mut hidden = Mask::default();
+                for x in usize::from(picture.visible_widths[y])..WIDTH {
+                    hidden.insert(x);
+                }
+                row.walls = row.walls.without(hidden);
+                row.player = row.player.without(hidden);
+                row.objects = row.objects.map(|mask| mask.without(hidden));
+                row.barriers = row.barriers.map(|mask| mask.without(hidden));
             }
+            row
         });
         Self { rows }
     }
@@ -206,6 +218,8 @@ pub struct Picture {
     pub objects: [Object; 2],
     pub player_x: u8,
     pub player_visible: [bool; HEIGHT],
+    /// Visible prefix of each row; the remainder is blanked black and cannot collide.
+    pub visible_widths: [u8; HEIGHT],
 }
 
 impl Default for Picture {
@@ -219,6 +233,7 @@ impl Default for Picture {
             }; 2],
             player_x: 0,
             player_visible: [false; HEIGHT],
+            visible_widths: [WIDTH as u8; HEIGHT],
         }
     }
 }
@@ -262,6 +277,7 @@ struct PaintedRow {
     geometry: GeometryRow,
     colors: [u8; 4],
     foreground_priority: bool,
+    visible_width: u8,
 }
 
 impl Video {
@@ -304,6 +320,7 @@ impl Video {
                     picture.objects[1].line.color,
                 ],
                 foreground_priority: appearance.walls_in_front,
+                visible_width: picture.visible_widths[y],
             };
             if self.composed[y] == Some(current) {
                 if let Some(first) = changed_start.take() {
@@ -324,6 +341,7 @@ impl Video {
                 }
                 mask.paint(pixels, picture.objects[slot].line.color);
             }
+            pixels[usize::from(current.visible_width).min(WIDTH)..].fill(0);
             self.composed[y] = Some(current);
         }
         if let Some(first) = changed_start {

@@ -46,7 +46,9 @@ impl Raster {
             1 => {
                 let visible = value & 2 == 0;
                 if self.visible && !visible {
-                    self.tia.horizontal_sync();
+                    // Adventure's final VBLANK store completes at CPU cycle 24. Stella applies
+                    // its one-color-clock delay after 68 horizontal-blank clocks: 24*3+1-68.
+                    self.tia.finish_line(24 * 3 + 1 - 68);
                 }
                 if !self.visible && visible {
                     self.tia.begin_picture();

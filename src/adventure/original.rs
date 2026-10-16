@@ -25,12 +25,16 @@ impl Adventure {
     // Room layers remain frozen between display refreshes; the player is sampled for every picture.
     pub(super) fn draw_room(&mut self) {
         let player_rows = player_rows(self.world.player.y, self.scheduler.player_visible);
+        // The original picture ends five pixels into its final row, before vertical blanking.
+        let mut visible_widths = [WIDTH as u8; HEIGHT];
+        visible_widths[HEIGHT - 1] = 5;
         let picture = Picture {
             appearance: self.display.appearance,
             objects: self.display.objects,
             walls: self.display.walls,
             player_x: screen_x(positioned_object_x(self.world.player.x) - 1),
             player_visible: player_rows,
+            visible_widths,
         };
         self.scheduler.player_visible = player_rows[HEIGHT - 1];
         let geometry = Geometry::prepare(&picture);

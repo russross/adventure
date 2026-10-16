@@ -1183,6 +1183,10 @@ fn initial_game_one_picture_matches_stella_pixels() {
     game.draw_room();
     let expected = include_bytes!("../../tests/stella-game-one.pixels");
     assert_eq!(&game.video.frame.pixels[..expected.len()], expected);
+    assert_eq!(
+        &game.video.frame.pixels[expected.len()..],
+        include_bytes!("../../tests/stella-game-one-final-row.pixels")
+    );
 }
 
 #[test]
