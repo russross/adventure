@@ -5,12 +5,132 @@ use std::ops::Range;
 pub const WIDTH: usize = 160;
 pub const HEIGHT: usize = 194;
 
-// Coverage bits retain geometric layers even when priority hides their colors.
-const WALL_MASK: u8 = 1;
-const PLAYER_MASK: u8 = 2;
-const FOREGROUND_MASK: u8 = WALL_MASK | PLAYER_MASK;
-const OBJECT_MASKS: [u8; 2] = [4, 8];
-const BARRIER_MASKS: [u8; 2] = [16, 32];
+// Three words cover one screen row without conflating overlapping layers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Mask([u64; 3]);
+
+impl Mask {
+    fn insert(&mut self, x: usize) {
+        self.0[x / 64] |= 1 << (x % 64);
+    }
+
+    fn overlaps(self, other: Self) -> bool {
+        self.0.into_iter().zip(other.0).any(|(a, b)| a & b != 0)
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self(std::array::from_fn(|i| self.0[i] | other.0[i]))
+    }
+
+    fn without(self, other: Self) -> Self {
+        Self(std::array::from_fn(|i| self.0[i] & !other.0[i]))
+    }
+
+    // Visit only covered pixels; the unused high bits of the last word stay clear.
+    fn paint(self, pixels: &mut [u8], color: u8) {
+        for (word, mut bits) in self.0.into_iter().enumerate() {
+            while bits != 0 {
+                let bit = bits.trailing_zeros() as usize;
+                pixels[word * 64 + bit] = color;
+                bits &= bits - 1;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct GeometryRow {
+    walls: Mask,
+    player: Mask,
+    objects: [Mask; 2],
+    barriers: [Mask; 2],
+}
+
+/// Complete geometric layers, independent of colors, priority, and pixel painting.
+pub struct Geometry {
+    rows: [GeometryRow; HEIGHT],
+}
+
+impl Geometry {
+    pub fn prepare(picture: &Picture) -> Self {
+        let appearance = picture.appearance;
+        let mut player = Mask::default();
+        for span in wrapped_spans(
+            usize::from(picture.player_x),
+            usize::from(appearance.player_width),
+        ) {
+            for x in span {
+                player.insert(x);
+            }
+        }
+        let barriers = std::array::from_fn(|slot| {
+            let mut mask = Mask::default();
+            if appearance.barriers[slot] {
+                let x = [11, 148][slot];
+                mask.insert(x);
+                mask.insert(x + 1);
+            }
+            mask
+        });
+
+        // Consecutive wall bands share their expansion. Sprites retain independent footprints.
+        let mut cached_walls = None;
+        let mut walls = Mask::default();
+        let rows = std::array::from_fn(|y| {
+            if cached_walls != Some(picture.walls[y]) {
+                walls = Mask::default();
+                for x in 0..WIDTH {
+                    if picture.walls[y].covers(x, appearance.mirrored) {
+                        walls.insert(x);
+                    }
+                }
+                cached_walls = Some(picture.walls[y]);
+            }
+            let objects = std::array::from_fn(|slot| {
+                let object = &picture.objects[slot];
+                let scale = match object.line.width {
+                    SpriteWidth::Normal => 1,
+                    SpriteWidth::Wide => 4,
+                };
+                let mut mask = Mask::default();
+                let mut bits = object.rows[y];
+                while bits != 0 {
+                    let bit = bits.leading_zeros() as usize;
+                    bits &= !(0x80 >> bit);
+                    for offset in 0..scale {
+                        mask.insert((usize::from(object.line.x) + bit * scale + offset) % WIDTH);
+                    }
+                }
+                mask
+            });
+            GeometryRow {
+                walls,
+                player: if picture.player_visible[y] {
+                    player
+                } else {
+                    Mask::default()
+                },
+                objects,
+                barriers,
+            }
+        });
+        Self { rows }
+    }
+
+    /// Detect every overlap, including objects hidden by foreground priority.
+    pub fn contacts(&self) -> Contacts {
+        let mut contacts = Contacts::default();
+        for row in &self.rows {
+            contacts.player_walls |= row.player.overlaps(row.walls);
+            for slot in 0..2 {
+                contacts.player_objects[slot] |= row.player.overlaps(row.objects[slot]);
+                contacts.player_barriers[slot] |= row.player.overlaps(row.barriers[slot]);
+            }
+            contacts.objects_touch |= row.objects[0].overlaps(row.objects[1]);
+        }
+        contacts
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlayfieldRow {
@@ -143,102 +263,35 @@ impl Video {
             self.frame.painted_lines = HEIGHT;
             return;
         }
-        let appearance = picture.appearance;
-        let mut coverage = vec![0u8; WIDTH * HEIGHT];
-        self.contacts = Contacts::default();
-
-        // Expand each distinct wall band once and copy its complete rows into the picture.
-        let mut cached_walls = None;
-        let mut wall_coverage = [0; WIDTH];
-        let mut wall_pixels = [appearance.background; WIDTH];
-        let player_spans = wrapped_spans(
-            usize::from(picture.player_x),
-            usize::from(appearance.player_width),
-        );
-        for (y, (masks, pixels)) in coverage
-            .chunks_exact_mut(WIDTH)
-            .zip(self.frame.pixels.chunks_exact_mut(WIDTH))
-            .enumerate()
-        {
-            let walls = picture.walls[y];
-            if cached_walls != Some(walls) {
-                wall_coverage.fill(0);
-                wall_pixels.fill(appearance.background);
-                for (cell, (masks, pixels)) in wall_coverage
-                    .chunks_exact_mut(4)
-                    .zip(wall_pixels.chunks_exact_mut(4))
-                    .enumerate()
-                {
-                    if walls.covers(cell * 4, appearance.mirrored) {
-                        masks.fill(WALL_MASK);
-                        pixels.fill(appearance.foreground);
-                    }
-                }
-                cached_walls = Some(walls);
-            }
-            masks.copy_from_slice(&wall_coverage);
-            pixels.copy_from_slice(&wall_pixels);
-
-            // The player covers at most two spans, split only at the screen seam.
-            if picture.player_visible[y] {
-                for span in player_spans.clone() {
-                    for (mask, pixel) in masks[span.clone()].iter_mut().zip(&mut pixels[span]) {
-                        self.contacts.player_walls |= *mask & WALL_MASK != 0;
-                        *mask |= PLAYER_MASK;
-                        *pixel = appearance.foreground;
-                    }
-                }
-            }
-        }
-
-        // The second slot is underneath the first, including their fixed thin barriers.
-        for slot in [1, 0] {
-            let object = picture.objects[slot];
-            let scale = match object.line.width {
-                SpriteWidth::Normal => 1,
-                SpriteWidth::Wide => 4,
-            };
-            let origin = usize::from(object.line.x) % WIDTH;
-            for (y, bits) in object.rows.into_iter().enumerate() {
-                let row = y * WIDTH;
-                if appearance.barriers[slot] {
-                    let x = [11, 148][slot];
-                    let span = row + x..row + x + 2;
-                    for (mask, pixel) in coverage[span.clone()]
-                        .iter_mut()
-                        .zip(&mut self.frame.pixels[span])
-                    {
-                        self.contacts.player_barriers[slot] |= *mask & PLAYER_MASK != 0;
-                        *mask |= BARRIER_MASKS[slot];
-                        if !appearance.walls_in_front || *mask & FOREGROUND_MASK == 0 {
-                            *pixel = object.line.color;
-                        }
-                    }
-                }
-
-                // Set bits accumulate hidden contacts before painting their scaled footprints.
-                let mut remaining = bits;
-                while remaining != 0 {
-                    let bit = remaining.leading_zeros() as usize;
-                    remaining &= !(0x80 >> bit);
-                    for offset in 0..scale {
-                        let x = origin + bit * scale + offset;
-                        let x = if x >= WIDTH { x - WIDTH } else { x };
-                        let index = row + x;
-                        let mask = &mut coverage[index];
-                        self.contacts.player_objects[slot] |= *mask & PLAYER_MASK != 0;
-                        self.contacts.objects_touch |= *mask & OBJECT_MASKS[1 - slot] != 0;
-                        *mask |= OBJECT_MASKS[slot];
-                        if !appearance.walls_in_front || *mask & FOREGROUND_MASK == 0 {
-                            self.frame.pixels[index] = object.line.color;
-                        }
-                    }
-                }
-            }
-        }
-
-        self.frame.painted_lines = HEIGHT;
+        let geometry = Geometry::prepare(picture);
+        self.contacts = geometry.contacts();
+        self.compose(picture, &geometry);
         self.retained = Some((*picture, self.contacts));
+    }
+
+    /// Paint visual geometry without changing the game's contact observations.
+    pub fn compose(&mut self, picture: &Picture, geometry: &Geometry) {
+        self.retained = None;
+        let appearance = picture.appearance;
+        for (row, pixels) in geometry
+            .rows
+            .iter()
+            .zip(self.frame.pixels.chunks_exact_mut(WIDTH))
+        {
+            pixels.fill(appearance.background);
+            let foreground = row.walls.union(row.player);
+            foreground.paint(pixels, appearance.foreground);
+
+            // The first object wins over the second; foreground priority applies to both.
+            for slot in [1, 0] {
+                let mut mask = row.objects[slot].union(row.barriers[slot]);
+                if appearance.walls_in_front {
+                    mask = mask.without(foreground);
+                }
+                mask.paint(pixels, picture.objects[slot].line.color);
+            }
+        }
+        self.frame.painted_lines = HEIGHT;
     }
 }
 

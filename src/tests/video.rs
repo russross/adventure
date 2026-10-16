@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn collision_geometry_can_run_without_painting_and_survive_replacement_artwork() {
+    let picture = Picture {
+        player_visible: [true; HEIGHT],
+        appearance: Appearance {
+            player_width: 4,
+            ..Appearance::default()
+        },
+        objects: [Object {
+            line: ObjectLine::default(),
+            rows: [0xff; HEIGHT],
+        }; 2],
+        ..Picture::default()
+    };
+    let geometry = Geometry::prepare(&picture);
+    let contacts = geometry.contacts();
+    assert_eq!(contacts.player_objects, [true; 2]);
+    assert!(contacts.objects_touch);
+
+    // An empty visual replacement has no bearing on the original contact geometry.
+    let replacement = Picture::default();
+    let mut video = Video {
+        contacts,
+        ..Video::default()
+    };
+    video.compose(&replacement, &Geometry::prepare(&replacement));
+    assert_eq!(video.contacts, contacts);
+    assert!(video.frame.pixels.iter().all(|pixel| *pixel == 0));
+}
+
+#[test]
 fn complete_objects_preserve_hidden_contacts_and_wide_seam_geometry() {
     let mut video = Video::default();
     let mut picture = Picture {
