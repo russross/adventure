@@ -19,7 +19,7 @@ class Host:
         pygame.display.init()
         pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=1, buffer=512)
         self.game = game
-        self.window = pygame.Window("Adventure", size=(640, 388), resizable=True)
+        self.window = pygame.Window("Adventure", size=(960, 582), resizable=True)
         self.clock = pygame.time.Clock()
         self.controls = Controls()
         self.pressed: set[int] = set()
@@ -36,12 +36,28 @@ class Host:
                 for rgb in (NTSC_PALETTE[color >> 1],)
             ]
         )
+        self.indexed: bytes | None = None
+        self.redraw = True
+        self.scaled: pygame.Surface | None = None
+        self.scaled_size = (0, 0)
 
     # Switches persist, while joysticks and momentary console buttons follow held keys.
     def sample_controls(self) -> Controls | None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return None
+            if event.type in (
+                pygame.WINDOWSHOWN,
+                pygame.WINDOWEXPOSED,
+                pygame.WINDOWRESIZED,
+                pygame.WINDOWSIZECHANGED,
+                pygame.WINDOWRESTORED,
+                pygame.WINDOWMAXIMIZED,
+                pygame.WINDOWDISPLAYCHANGED,
+                pygame.RENDER_TARGETS_RESET,
+                pygame.RENDER_DEVICE_RESET,
+            ):
+                self.redraw = True
             if event.type == pygame.WINDOWFOCUSLOST:
                 self.pressed.clear()
             if event.type == pygame.KEYUP:
@@ -60,6 +76,7 @@ class Host:
             if event.key in (pygame.K_1, pygame.K_2, pygame.K_3):
                 scale = event.key - pygame.K_1 + 1
                 self.window.size = (320 * scale, HEIGHT * scale)
+                self.redraw = True
             if event.key in (pygame.K_F3, pygame.K_F4):
                 self.controls.color = event.key == pygame.K_F3
             if event.key in (pygame.K_F5, pygame.K_F6):
@@ -115,17 +132,27 @@ class Host:
         if controls is None:
             return None
         self.play_sound()
-        pixels = self.image.get_buffer()
-        pixels.write(bytes(self.game.video.pixels))
-        del pixels
+        indexed = bytes(self.game.video.pixels)
+        changed = indexed != self.indexed
+        if changed:
+            pixels = self.image.get_buffer()
+            pixels.write(indexed)
+            del pixels
+            self.indexed = indexed
         width, height = self.window.size
         scale = min(width / 320, height / HEIGHT)
         size = (max(1, round(320 * scale)), max(1, round(HEIGHT * scale)))
-        picture = pygame.transform.scale(self.image, size)
-        surface = self.window.get_surface()
-        surface.fill("black")
-        surface.blit(picture, ((width - size[0]) // 2, (height - size[1]) // 2))
-        self.window.flip()
+        if changed or size != self.scaled_size:
+            self.scaled = pygame.transform.scale(self.image, size)
+            self.scaled_size = size
+            self.redraw = True
+        # Exposure still repaints cached pixels; idle boundaries keep input, sound, and pacing live.
+        if self.redraw and self.scaled is not None:
+            surface = self.window.get_surface()
+            surface.fill("black")
+            surface.blit(self.scaled, ((width - size[0]) // 2, (height - size[1]) // 2))
+            self.window.flip()
+            self.redraw = False
         self.clock.tick(60)
         return controls
 

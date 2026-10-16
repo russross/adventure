@@ -75,7 +75,6 @@ class ObjectId(IntEnum):
     Dot = auto()
     Chalice = auto()
     Magnet = auto()
-    Empty = auto()
 
 
 class RecordId(IntEnum):
@@ -95,9 +94,8 @@ class RecordId(IntEnum):
     Bat = auto()
 
 
-# The empty display slot borrows the bridge position but has blank artwork.
+# Real object identities map to movable records; scenery has fixed positions.
 OBJECT_RECORDS = {obj: RecordId[obj.name] for obj in ObjectId if obj.name in RecordId.__members__}
-OBJECT_RECORDS[ObjectId.Empty] = RecordId.Bridge
 DRAGONS = (RecordId.Rhindle, RecordId.Yorgle, RecordId.Grundle)
 
 
@@ -211,11 +209,11 @@ class World:
     safe_player: Position = field(default_factory=Position)
     game: Game = Game.One
     won: bool = False
-    held: ObjectId = ObjectId.Light
+    held: ObjectId | None = ObjectId.Light
     held_offset_x: int = 0
     held_offset_y: int = 0
-    first_visible: ObjectId = ObjectId.Light
-    second_visible: ObjectId = ObjectId.Light
+    first_visible: ObjectId | None = ObjectId.Light
+    second_visible: ObjectId | None = ObjectId.Light
     last_candidate: ObjectId = ObjectId.Light
     joystick_direction: Direction = field(default_factory=Direction)
     idle_ticks: int = 0

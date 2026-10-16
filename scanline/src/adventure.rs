@@ -2,7 +2,7 @@
 
 use crate::hardware::FrameHost;
 use crate::input::{Controls, Difficulty, Direction};
-use crate::sound::{EffectCadence, Sound, SoundEffect};
+use crate::sound::{Sound, SoundEffect};
 use crate::video::{Appearance, ObjectLine, PlayfieldRow, Scanline, SpriteWidth, Video, WIDTH};
 use adventure_trace::{Control, Point, Session};
 use std::cell::RefCell;
@@ -1503,13 +1503,7 @@ impl Adventure {
         if self.world.sound_effect == SoundEffect::Victory {
             self.display.appearance.foreground = remaining;
         }
-        let cadence = if self.world.won {
-            EffectCadence::EveryPicture
-        } else {
-            EffectCadence::EveryTurn
-        };
-        self.sound
-            .effect(self.world.sound_effect, remaining, cadence);
+        self.sound.effect(self.world.sound_effect, remaining);
     }
 }
 

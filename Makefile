@@ -3,6 +3,7 @@
 .NOTPARALLEL:
 .DELETE_ON_ERROR:
 CARGO ?= cargo
+RUSTFMT ?= rustfmt
 UV ?= uv
 ROM_MAKE ?= $(shell command -v gmake 2>/dev/null || command -v make)
 PYTHON ?= python3
@@ -27,9 +28,11 @@ $(PACKAGES): Cargo.lock
 # Formatting and linting precede behavioral checks, including ROM verification.
 format:
 	$(CARGO) fmt --all
+	$(RUSTFMT) tests/performance.rs
 
 fmt:
 	$(CARGO) fmt --all --check
+	$(RUSTFMT) --check tests/performance.rs
 
 lint: fmt Cargo.lock
 	$(CARGO) clippy --locked --workspace --all-targets -- -D warnings
@@ -63,7 +66,7 @@ rom gameplay analysis verify rom-check:
 # Keep release executables usable while discarding compiler intermediates.
 mostlyclean:
 	rm -rf target/debug target/release/deps target/release/build target/release/incremental target/release/.fingerprint target/release/examples
-	rm -f target/directport-smoke.bmp target/directport-smoke.trace target/scanline-smoke.bmp target/frame-smoke.bmp
+	rm -f target/directport-smoke.bmp target/directport-smoke.trace target/scanline-smoke.bmp target/frame-smoke.bmp target/py-smoke.bmp
 	$(ROM_MAKE) -C rom mostlyclean
 
 clean: mostlyclean
@@ -72,10 +75,10 @@ clean: mostlyclean
 
 # Default play and legacy implementation names follow the workspace packages.
 .PHONY: run rust rust-release rust-check rust-smoke translation translation-release translation-run translation-check translation-smoke scanline-flamegraph
-run: scanline-run
-rust rust-release: scanline
-rust-check: scanline-check
-rust-smoke: scanline-smoke
+run: frame-run
+rust rust-release: frame
+rust-check: frame-check
+rust-smoke: frame-smoke
 translation translation-release: directport
 translation-run: directport-run
 translation-check: directport-check
@@ -83,3 +86,21 @@ translation-smoke: directport-smoke
 
 scanline-flamegraph: Cargo.lock
 	CARGO_PROFILE_RELEASE_DEBUG=true $(CARGO) flamegraph --release -p scanline --bin scanline $(FLAMEGRAPH_ARGS) -- $(ARGS)
+
+.PHONY: frame-flamegraph frame-python-reference
+frame-flamegraph: Cargo.lock
+	CARGO_PROFILE_RELEASE_DEBUG=true $(CARGO) flamegraph --release -p frame --bin frame $(FLAMEGRAPH_ARGS) -- $(ARGS)
+
+frame-python-reference: Cargo.lock
+	$(CARGO) build --locked -p frame --example python_reference
+
+# Release examples share the saved trace and identical workload boundaries.
+.PHONY: performance-build performance audio-performance
+performance-build: Cargo.lock
+	$(CARGO) build --locked --release -p directport --example directport_performance -p scanline --example scanline_performance -p frame --example frame_performance
+
+performance: performance-build
+	$(PYTHON) tests/performance.py
+
+audio-performance: performance-build
+	$(PYTHON) tests/performance.py --audio-comparison

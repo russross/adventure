@@ -25,34 +25,36 @@ from model import (
 )
 from rooms import ROOM_COLORS, WALLS, room_exit
 from sound import Effect, Sound
-from video import Appearance, ObjectLine, Video, wall_pixels
+from video import HEIGHT, Appearance, Object, Picture, Video, wall_pixels
 
 
 @dataclass
 class Display:
     appearance: Appearance = field(default_factory=Appearance)
     walls: tuple[int, ...] = field(
-        default_factory=lambda: tuple(wall_pixels(row, True) for row in art.WALLS_ENCLOSED_ROOM)
+        default_factory=lambda: wall_rows(
+            tuple(wall_pixels(row, True) for row in art.WALLS_ENCLOSED_ROOM)
+        )
     )
-    objects: tuple[ObjectLine, ObjectLine] = field(
-        default_factory=lambda: (ObjectLine(), ObjectLine())
-    )
-    positions: tuple[Position, Position] = field(default_factory=lambda: (Position(), Position()))
-    images: tuple[tuple[int, ...], tuple[int, ...]] = (art.EMPTY_IMAGE, art.EMPTY_IMAGE)
-    player_visible: bool = False
+    objects: tuple[Object, Object] = field(default_factory=lambda: (Object(), Object()))
 
 
 class Adventure:
     def __init__(self) -> None:
+        self.reset_runtime()
+
+    def reset_runtime(self) -> None:
         self.world = World()
         self.video = Video()
         self.sound = Sound()
         self.controls = Controls()
         self.display = Display()
         self.phase = Phase.Player
+        self.player_visible = False
 
     # Presentation returns the inputs sampled at that boundary; None means quit.
     def run(self, present: Callable[[], Controls | None], controls: Controls) -> None:
+        self.reset_runtime()
         self.controls = controls
         if not self.initialize_world(present):
             return
@@ -128,7 +130,7 @@ class Adventure:
                 dragon.state = DragonState.Wandering
                 dragon.bite_timer = 0
             self.sound.remaining = 0
-            world.held = ObjectId.Empty
+            world.held = None
         if self.controls.select and not world.previous_select:
             if world.player.room == Room.GameSelection:
                 world.game = Game((world.game + 1) % 3)
@@ -189,7 +191,7 @@ class Adventure:
                 return False
             self.draw_room()
         world.won = False
-        world.held = ObjectId.Empty
+        world.held = None
         self.remember_switches()
         return True
 
@@ -321,8 +323,8 @@ class Adventure:
         world = self.world
         newly_pressed = self.controls.left.fire and not world.fire_was_pressed
         world.fire_was_pressed = self.controls.left.fire
-        if newly_pressed and world.held != ObjectId.Empty:
-            world.held = ObjectId.Empty
+        if newly_pressed and world.held is not None:
+            world.held = None
             self.sound.start(Effect.Drop, 4)
         if self.video.contacts.player_objects[0]:
             touched = world.first_visible
@@ -330,7 +332,11 @@ class Adventure:
             touched = world.second_visible
         else:
             return
-        if touched <= ObjectId.Grundle or self.object_position(touched).room != world.player.room:
+        if (
+            touched is None
+            or touched <= ObjectId.Grundle
+            or self.object_position(touched).room != world.player.room
+        ):
             return
         record = OBJECT_RECORDS.get(touched)
         if record is None:
@@ -345,9 +351,9 @@ class Adventure:
 
     def move_held_object(self) -> None:
         world = self.world
-        if world.held == ObjectId.Empty:
+        if world.held is None:
             return
-        record = OBJECT_RECORDS.get(world.held)
+        record = OBJECT_RECORDS.get(world.held) if world.held is not None else None
         if record is not None:
             world.positions[record] = Position(
                 world.player.room,
@@ -356,20 +362,20 @@ class Adventure:
             )
             self.move_object(record, Direction(), 0)
 
-    def touching_player(self, obj: ObjectId) -> bool:
+    def touching_player(self, obj: ObjectId | None) -> bool:
         if obj == self.world.first_visible:
             return self.video.contacts.player_objects[0]
         if obj == self.world.second_visible:
             return self.video.contacts.player_objects[1]
         return False
 
-    def touching_object(self, obj: ObjectId) -> ObjectId:
+    def touching_object(self, obj: ObjectId | None) -> ObjectId | None:
         if self.video.contacts.objects_touch:
             if obj == self.world.first_visible:
                 return self.world.second_visible
             if obj == self.world.second_visible:
                 return self.world.first_visible
-        return ObjectId.Empty
+        return None
 
     # Key contact advances a gate before entry is resolved and animation advances.
     def update_gates(self) -> None:
@@ -383,7 +389,7 @@ class Adventure:
                 if self.touching_player(gate):
                     world.gates[gate] = GateState.Open
                     record = RecordId.Player
-                elif touched != ObjectId.Empty:
+                elif touched is not None:
                     record = OBJECT_RECORDS.get(touched)
                 if record is not None:
                     world.positions[record] = replace(world.positions[record], room=inside, y=16)
@@ -395,7 +401,7 @@ class Adventure:
     def update_magnet(self) -> None:
         positions = self.world.positions
         magnet = positions[RecordId.Magnet]
-        positions[RecordId.Magnet] = replace(magnet, y=(magnet.y - 8) & 255)
+        target = replace(magnet, y=(magnet.y - 8) & 255)
         for item in (
             RecordId.GoldKey,
             RecordId.WhiteKey,
@@ -404,11 +410,10 @@ class Adventure:
             RecordId.Bridge,
             RecordId.Chalice,
         ):
-            direction = self.direction_toward(item, RecordId.Magnet)
+            direction = direction_toward(positions[item], target)
             if direction is not None:
                 self.move_object(item, direction, 1)
                 break
-        positions[RecordId.Magnet] = magnet
 
     def update_light(self) -> None:
         world = self.world
@@ -423,10 +428,7 @@ class Adventure:
 
     # A target in another room is absent; a coincident target gives idle motion.
     def direction_toward(self, source: RecordId, target: RecordId) -> Direction | None:
-        start, end = self.world.positions[source], self.world.positions[target]
-        if start.room != end.room:
-            return None
-        return Direction(end.x > start.x, end.x < start.x, end.y > start.y, end.y < start.y)
+        return direction_toward(self.world.positions[source], self.world.positions[target])
 
     def dragon_direction(self, record: RecordId) -> Direction:
         if self.controls.right_difficulty == Difficulty.A:
@@ -543,18 +545,18 @@ class Adventure:
             world.positions[bat.carried] = Position(
                 position.room, (position.x + 8) & 255, position.y
             )
-            if OBJECT_RECORDS.get(world.held) == bat.carried:
-                world.held = ObjectId.Empty
+            if world.held is not None and OBJECT_RECORDS.get(world.held) == bat.carried:
+                world.held = None
 
     # Visible identities rotate through inhabitants, preserving the original flicker.
     def select_objects(self) -> None:
         world = self.world
-        world.first_visible = world.second_visible = ObjectId.Empty
+        world.first_visible = world.second_visible = None
         candidate = world.last_candidate
         while True:
             candidate = ObjectId((candidate + 1) % 18)
             if self.object_position(candidate).room == world.player.room:
-                if world.first_visible == ObjectId.Empty:
+                if world.first_visible is None:
                     world.first_visible = candidate
                 else:
                     world.second_visible = candidate
@@ -569,7 +571,9 @@ class Adventure:
         ):
             world.first_visible, world.second_visible = world.second_visible, world.first_visible
 
-    def object_position(self, obj: ObjectId) -> Position:
+    def object_position(self, obj: ObjectId | None) -> Position:
+        if obj is None:
+            return self.world.positions[RecordId.Bridge]
         record = OBJECT_RECORDS.get(obj)
         if record is not None:
             return self.world.positions[record]
@@ -604,22 +608,24 @@ class Adventure:
                 room in (Room.SecretPassage, Room.SidePassage0c),
             ),
         )
-        self.display.walls = tuple(wall_pixels(row, mirrored) for row in WALLS[room])
+        self.display.walls = wall_rows(tuple(wall_pixels(row, mirrored) for row in WALLS[room]))
         self.select_objects()
         first, second = self.world.first_visible, self.world.second_visible
-        self.display.positions = (self.object_position(first), self.object_position(second))
-        self.display.images = (self.object_image(first), self.object_image(second))
-        self.display.objects = (self.object_line(first), self.object_line(second))
+        self.display.objects = (self.prepare_object(first, 0), self.prepare_object(second, 1))
 
-    def object_line(self, obj: ObjectId) -> ObjectLine:
+    def prepare_object(self, obj: ObjectId | None, slot: int) -> Object:
         wide = obj in (ObjectId.Light, ObjectId.Bridge)
-        return ObjectLine(
-            object_x(self.object_position(obj).x, wide),
+        position = self.object_position(obj)
+        return Object(
+            object_x(position.x, wide),
             self.object_color(obj),
             4 if wide else 1,
+            sprite_rows(self.object_image(obj), position.y, slot),
         )
 
-    def object_image(self, obj: ObjectId) -> tuple[int, ...]:
+    def object_image(self, obj: ObjectId | None) -> tuple[int, ...]:
+        if obj is None:
+            return art.EMPTY_IMAGE
         if obj in (ObjectId.GoldGate, ObjectId.WhiteGate, ObjectId.BlackGate):
             stage = min(max(self.world.gates[obj] - 1, 0) // 4, 12)
             return art.GATE_IMAGE[abs(stage - 6) * 2 :]
@@ -645,10 +651,11 @@ class Adventure:
             ObjectId.Dot: art.DOT_IMAGE,
             ObjectId.Chalice: art.CHALICE_IMAGE,
             ObjectId.Magnet: art.MAGNET_IMAGE,
-            ObjectId.Empty: art.EMPTY_IMAGE,
         }[obj]
 
-    def object_color(self, obj: ObjectId) -> int:
+    def object_color(self, obj: ObjectId | None) -> int:
+        if obj is None:
+            return self.display_color(0)
         if self.controls.color:
             colors: dict[ObjectId, int | None] = {
                 ObjectId.Light: 0x28,
@@ -679,41 +686,64 @@ class Adventure:
             }
         return self.display_color(colors.get(obj, 0))
 
-    # Each logical row paints retained data, then commits the newly fetched sprite rows.
+    # Frozen room layers combine with a newly sampled player to form one complete picture.
     def draw_room(self) -> None:
         display = self.display
-        objects = tuple(
-            replace(obj, x=object_x(position.x, obj.scale == 4), bits=0)
-            for obj, position in zip(display.objects, display.positions)
+        rows = player_rows(self.world.player.y, self.player_visible)
+        self.player_visible = rows[-1]
+        self.video.paint(
+            Picture(
+                display.appearance,
+                display.walls,
+                display.objects,
+                (positioned_x(self.world.player.x) - 1) % 160,
+                rows,
+            )
         )
-        first, second = objects
-        walls = display.walls[0]
-        player_x = (positioned_x(self.world.player.x) - 1) % 160
-        player_y = (self.world.player.y - 4) & 255
-        visible = display.player_visible
-        cursors = [0, 0]
-        staged_second = 0
-        band = 1
-        self.video.begin_picture()
-        for row in range(104, 7, -1):
-            if row != 104 and signed(row - display.positions[1].y) < 0:
-                image = display.images[1]
-                staged_second = image[cursors[1]] if cursors[1] < len(image) else 0
-                cursors[1] += staged_second != 0
+
+
+# Wall band changes occur on the second physical row at each logical boundary.
+def wall_rows(bands: tuple[int, ...]) -> tuple[int, ...]:
+    rows = []
+    band = 0
+    for logical in range(104, 7, -1):
+        rows.append(bands[band])
+        if logical % 16 == 0:
+            band += 1
+        rows.append(bands[band])
+    return tuple(rows)
+
+
+# Sprites expand independently; only the second slot retains bits when eligibility wraps.
+def sprite_rows(image: tuple[int, ...], y: int, slot: int) -> bytes:
+    rows = bytearray(HEIGHT)
+    cursor = bits = 0
+    for index, logical in enumerate(range(104, 7, -1)):
+        rows[index * 2] = bits
+        if signed(logical - y) < 0 and (slot == 0 or index != 0):
+            bits = image[cursor] if cursor < len(image) else 0
+            cursor += bits != 0
+        elif slot == 0:
             bits = 0
-            if signed(row - display.positions[0].y) < 0:
-                image = display.images[0]
-                bits = image[cursors[0]] if cursors[0] < len(image) else 0
-                cursors[0] += bits != 0
-            self.video.paint(display.appearance, walls, (first, second), player_x, visible)
-            first = replace(first, bits=bits)
-            second = replace(second, bits=staged_second)
-            visible = (row - player_y) & 252 == 0
-            if row & 15 == 0:
-                walls = display.walls[band]
-                band += 1
-            self.video.paint(display.appearance, walls, (first, second), player_x, visible)
-        display.player_visible = visible
+        rows[index * 2 + 1] = bits
+    return bytes(rows)
+
+
+# The preceding picture supplies the first player row, including across initialization.
+def player_rows(y: int, retained: bool) -> tuple[bool, ...]:
+    rows = []
+    bottom = (y - 4) & 255
+    for logical in range(104, 7, -1):
+        rows.append(retained)
+        retained = (logical - bottom) & 252 == 0
+        rows.append(retained)
+    return tuple(rows)
+
+
+def direction_toward(start: Position, end: Position) -> Direction | None:
+    if start.room != end.room:
+        return None
+    return Direction(end.x > start.x, end.x < start.x, end.y > start.y, end.y < start.y)
 
 
 def positioned_x(x: int) -> int:

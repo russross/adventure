@@ -91,8 +91,10 @@ fn sdl_idle_redraws_resets_uploads_and_frame_boundaries() {
     assert_eq!(hardware.redraws, settled);
     assert!(settled >= initial);
     assert_eq!(hardware.frames, 3);
-    assert!(hardware.audio.lock().idle());
-    assert_eq!(hardware.audio.status(), sdl2::audio::AudioStatus::Paused);
+    assert_eq!(
+        hardware.audio.device.status(),
+        sdl2::audio::AudioStatus::Playing
+    );
 
     // Real SDL events force repainting even while the indexed picture is retained.
     let events = hardware._sdl.event().unwrap();
@@ -189,47 +191,4 @@ fn stella_controls_and_aliases_remain_independent() {
     assert_eq!(keyboard.sample().left_difficulty, Difficulty::B);
     assert_eq!(keyboard.sample().right_difficulty, Difficulty::B);
     assert!(keyboard.sample().color);
-}
-
-// Exercise the real callback while leaving graphics idle. Manual callback reads
-// under SDL's lock make completion deterministic without depending on wall time.
-#[test]
-#[ignore = "requires an SDL video and audio driver; run with dummy drivers in headless environments"]
-fn sdl_cached_audio_resumes_and_pauses_after_release() {
-    use crate::sound::{EffectCadence, SoundEffect};
-    use sdl2::audio::AudioStatus;
-
-    let mut hardware = SdlHardware::new(false, None).unwrap();
-    let frame = Frame::default();
-    let mut sound = Sound::default();
-    hardware.present(&frame, &sound).unwrap();
-    assert_eq!(hardware.audio.status(), AudioStatus::Paused);
-    sound.effect(SoundEffect::Pickup, 3, EffectCadence::EveryTurn);
-    hardware.present(&frame, &sound).unwrap();
-    assert_eq!(hardware.audio.status(), AudioStatus::Playing);
-    let mut output = [0.0; 800];
-    hardware.audio.lock().render(&mut output);
-    assert!(output.iter().any(|sample| sample.abs() > 0.001));
-
-    sound.silence();
-    hardware.present(&frame, &sound).unwrap();
-    hardware.audio.lock().render(&mut output);
-    assert!(output[96..].iter().all(|sample| *sample == 0.0));
-    hardware.present(&frame, &sound).unwrap();
-    assert_eq!(hardware.audio.status(), AudioStatus::Paused);
-
-    // Muting releases playback; unmuting seeks the latest step rather than
-    // replaying the effect from the position retained before the mute shortcut.
-    sound.effect(SoundEffect::Roar, 15, EffectCadence::EveryTurn);
-    hardware.present(&frame, &sound).unwrap();
-    hardware.audio.lock().render(&mut output);
-    hardware.muted = true;
-    hardware.present(&frame, &sound).unwrap();
-    hardware.audio.lock().render(&mut output);
-    hardware.present(&frame, &sound).unwrap();
-    assert_eq!(hardware.audio.status(), AudioStatus::Paused);
-    sound.effect(SoundEffect::Roar, 10, EffectCadence::EveryTurn);
-    hardware.muted = false;
-    hardware.present(&frame, &sound).unwrap();
-    assert_eq!(hardware.audio.status(), AudioStatus::Playing);
 }

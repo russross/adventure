@@ -47,14 +47,14 @@ impl PlayfieldRow {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SpriteWidth {
     #[default]
     Normal,
     Wide,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObjectLine {
     pub x: u8,
     pub color: u8,
@@ -62,7 +62,7 @@ pub struct ObjectLine {
     pub bits: u8,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Appearance {
     pub background: u8,
     pub foreground: u8,
@@ -73,13 +73,13 @@ pub struct Appearance {
 }
 
 // Each drawable owns its complete vertical coverage before composition begins.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Object {
     pub line: ObjectLine,
     pub rows: [u8; HEIGHT],
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Picture {
     pub appearance: Appearance,
     pub walls: [PlayfieldRow; HEIGHT],
@@ -129,11 +129,20 @@ impl Default for Frame {
 pub struct Video {
     pub frame: Frame,
     pub contacts: Contacts,
+    retained: Option<(Picture, Contacts)>,
 }
 
 impl Video {
     // Geometry remains separate from color so every hidden overlap still contributes contacts.
     pub fn paint(&mut self, picture: &Picture) {
+        // An identical picture has identical hidden geometry as well as visible pixels.
+        if let Some((previous, contacts)) = &self.retained
+            && previous == picture
+        {
+            self.contacts = *contacts;
+            self.frame.painted_lines = HEIGHT;
+            return;
+        }
         let appearance = picture.appearance;
         let mut coverage = vec![0u8; WIDTH * HEIGHT];
         self.contacts = Contacts::default();
@@ -229,6 +238,7 @@ impl Video {
         }
 
         self.frame.painted_lines = HEIGHT;
+        self.retained = Some((*picture, self.contacts));
     }
 }
 

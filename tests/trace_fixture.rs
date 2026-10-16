@@ -8,6 +8,20 @@ use directport::replay::ReplayHost;
 use directport::sound::Sound;
 use directport::tia::Frame;
 
+// Keep the recorded complete playthrough independent of generated test inputs.
+pub fn easy_playthrough() -> Vec<Record> {
+    let records: Vec<Record> = include_str!("easy.trace")
+        .lines()
+        .map(|line| line.parse().unwrap())
+        .collect();
+    assert_eq!(records.last().unwrap().at.frame, 4045);
+    assert!(records.iter().any(|record| matches!(
+        record.event,
+        adventure_trace::Event::State(_, adventure_trace::State::Won(true))
+    )));
+    records
+}
+
 struct ScriptedHost {
     frame: u64,
     limit: u64,

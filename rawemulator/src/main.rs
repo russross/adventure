@@ -60,6 +60,22 @@ fn main() {
 mod tests {
     use super::{Bus, Cpu, fixture};
 
+    // Validate the saved human playthrough using cartridge instructions and hardware contacts.
+    #[test]
+    fn recorded_easy_playthrough_validates_against_original_rom() {
+        let records = fixture::easy_playthrough();
+        let frames = records.last().unwrap().at.frame;
+        let mut cpu = Cpu::new(Bus::new(records).unwrap());
+        for _ in 0..(frames + 1) * 100_000 {
+            match cpu.step() {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(error) => panic!("PC={:04x}: {error}", cpu.pc),
+            }
+        }
+        panic!("ROM failed to reach trace end");
+    }
+
     #[test]
     fn canceled_boot_trace_validates_without_initialization() {
         let mut recording = adventure_trace::Session::record();

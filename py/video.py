@@ -1,6 +1,6 @@
-"""Scanline composition; contacts include obscured sprite geometry."""
+"""Complete-picture layers and collision geometry independent of visible priority."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 WIDTH = 160
 HEIGHT = 194
@@ -18,7 +18,7 @@ def wall_pixels(packed: tuple[int, int, int], mirrored: bool) -> int:
 
 
 def solid(x: int, width: int) -> int:
-    mask = ((1 << width) - 1) << (x % WIDTH)
+    mask = ((1 << min(width, WIDTH)) - 1) << (x % WIDTH)
     return (mask | (mask >> WIDTH)) & ((1 << WIDTH) - 1)
 
 
@@ -33,21 +33,32 @@ class Appearance:
     mirrored: bool = True
     walls_in_front: bool = False
     barriers: tuple[bool, bool] = (False, False)
+    player_width: int = 4
 
 
+# Prepared layers contain screen coordinates and all physical rows, with no live world references.
 @dataclass(frozen=True)
-class ObjectLine:
+class Object:
     x: int = 0
     color: int = 0
     scale: int = 1
-    bits: int = 0
+    rows: bytes = bytes(HEIGHT)
 
 
-@dataclass
+@dataclass(frozen=True)
+class Picture:
+    appearance: Appearance
+    walls: tuple[int, ...]
+    objects: tuple[Object, Object]
+    player_x: int
+    player_visible: tuple[bool, ...]
+
+
+@dataclass(frozen=True)
 class Contacts:
     player_walls: bool = False
-    player_barriers: list[bool] = field(default_factory=lambda: [False, False])
-    player_objects: list[bool] = field(default_factory=lambda: [False, False])
+    player_barriers: tuple[bool, bool] = (False, False)
+    player_objects: tuple[bool, bool] = (False, False)
     objects_touch: bool = False
 
 
@@ -55,44 +66,61 @@ class Video:
     def __init__(self) -> None:
         self.pixels = bytearray(WIDTH * HEIGHT)
         self.contacts = Contacts()
-        self.row = 0
+        self.retained: Picture | None = None
+        self.retained_contacts = Contacts()
 
-    def begin_picture(self) -> None:
-        self.contacts = Contacts()
-        self.row = 0
+    # An identical picture retains hidden contacts as well as its complete raster.
+    def paint(self, picture: Picture) -> None:
+        if picture == self.retained:
+            self.contacts = self.retained_contacts
+            return
+        appearance = picture.appearance
+        player_mask = solid(picture.player_x, appearance.player_width)
+        players = tuple(player_mask if visible else 0 for visible in picture.player_visible)
+        foreground = tuple(walls | player for walls, player in zip(picture.walls, players))
+        self.pixels[:] = bytes([appearance.background]) * (WIDTH * HEIGHT)
+        self.paint_layer(foreground, appearance.foreground)
 
-    # Bit masks describe the geometry directly, independent of layer priority.
-    def paint(
-        self,
-        appearance: Appearance,
-        walls: int,
-        objects: tuple[ObjectLine, ObjectLine],
-        player_x: int,
-        player_visible: bool,
-    ) -> None:
-        player = solid(player_x, 4) if player_visible else 0
-        first, second = (sprite(obj.x, obj.bits, obj.scale) for obj in objects)
-        left = solid(11, 2) if appearance.barriers[0] else 0
-        right = solid(148, 2) if appearance.barriers[1] else 0
-        contacts = self.contacts
-        contacts.player_walls |= bool(player & walls)
-        contacts.player_barriers[0] |= bool(player & left)
-        contacts.player_barriers[1] |= bool(player & right)
-        contacts.player_objects[0] |= bool(player & first)
-        contacts.player_objects[1] |= bool(player & second)
-        contacts.objects_touch |= bool(first & second)
+        # Each object completes before the next; geometric contacts never depend on winning color.
+        object_masks = tuple(
+            tuple(sprite(obj.x, bits, obj.scale) for bits in obj.rows) for obj in picture.objects
+        )
+        barriers = tuple(
+            solid(x, 2) if enabled else 0 for x, enabled in zip((11, 148), appearance.barriers)
+        )
+        for slot in (1, 0):
+            masks = tuple(mask | barriers[slot] for mask in object_masks[slot])
+            if appearance.walls_in_front:
+                masks = tuple(mask & ~front for mask, front in zip(masks, foreground))
+            self.paint_layer(masks, picture.objects[slot].color)
 
-        # Paint from the back forward while keeping hidden contacts intact.
-        layers = [(walls | player, appearance.foreground)]
-        layers += [(second | right, objects[1].color), (first | left, objects[0].color)]
-        if appearance.walls_in_front:
-            layers.append((walls | player, appearance.foreground))
-        start = self.row * WIDTH
-        pixels = bytearray([appearance.background]) * WIDTH
-        for mask, color in layers:
-            while mask:
-                lowest = mask & -mask
-                pixels[lowest.bit_length() - 1] = color
-                mask ^= lowest
-        self.pixels[start : start + WIDTH] = pixels
-        self.row += 1
+        self.contacts = Contacts(
+            any(player & wall for player, wall in zip(players, picture.walls)),
+            (
+                any(player & barriers[0] for player in players),
+                any(player & barriers[1] for player in players),
+            ),
+            (
+                any(player & mask for player, mask in zip(players, object_masks[0])),
+                any(player & mask for player, mask in zip(players, object_masks[1])),
+            ),
+            any(first & second for first, second in zip(*object_masks)),
+        )
+        self.retained = picture
+        self.retained_contacts = self.contacts
+
+    # Rows with the same mask share their expanded pixel offsets within this layer.
+    def paint_layer(self, rows: tuple[int, ...], color: int) -> None:
+        offsets: dict[int, tuple[int, ...]] = {}
+        for row, mask in enumerate(rows):
+            if mask not in offsets:
+                bits = mask
+                positions = []
+                while bits:
+                    lowest = bits & -bits
+                    positions.append(lowest.bit_length() - 1)
+                    bits ^= lowest
+                offsets[mask] = tuple(positions)
+            start = row * WIDTH
+            for x in offsets[mask]:
+                self.pixels[start + x] = color

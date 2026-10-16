@@ -6,4 +6,5 @@ pub mod input;
 pub mod recording;
 pub mod replay;
 pub mod sound;
+mod streaming_audio;
 pub mod video;

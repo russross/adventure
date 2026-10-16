@@ -32,3 +32,7 @@ run:
 smoke:
 	$(MAKE) -C .. frame-smoke
 
+
+.PHONY: flamegraph
+flamegraph:
+	$(MAKE) -C .. frame-flamegraph

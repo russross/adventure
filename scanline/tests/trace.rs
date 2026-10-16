@@ -7,6 +7,16 @@ use scanline::replay::ReplayHost;
 #[path = "../../tests/trace_fixture.rs"]
 pub mod fixture;
 
+#[test]
+fn recorded_easy_playthrough_reaches_victory() {
+    let records = fixture::easy_playthrough();
+    let frames = records.last().unwrap().at.frame;
+    let mut game = Adventure::default();
+    game.trace = Some(RefCell::new(Session::replay(records).unwrap()));
+    game.run(&mut ReplayHost::new(frames)).unwrap();
+    assert!(game.world.won);
+}
+
 // The refactor consumes translation inputs and independently produces every expected state record.
 #[test]
 fn translation_traces_validate_in_refactored_game() {

@@ -11,6 +11,12 @@ use directport::tia::Frame;
 pub mod fixture;
 use fixture::{record, replay};
 
+#[test]
+fn recorded_easy_playthrough_reaches_victory() {
+    let game = replay(fixture::easy_playthrough()).unwrap();
+    assert!(game.ram.won);
+}
+
 // Exercise switch edges, random initialization, controls, movement, and bounded termination at all picture phases.
 #[test]
 fn all_games_roundtrip_with_only_consumed_inputs() {

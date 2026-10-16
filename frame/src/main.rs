@@ -11,9 +11,11 @@ use frame::adventure::Adventure;
 use frame::hardware::SdlHardware;
 use frame::recording::Recording;
 use frame::replay::PlaybackHost;
+use frame::sound::AudioMode;
 
 #[derive(Default)]
 struct Options {
+    audio: AudioMode,
     frames: Option<NonZeroUsize>,
     unpaced: bool,
     snapshot: Option<PathBuf>,
@@ -45,6 +47,12 @@ fn execute() -> Result<(), String> {
     let mut args = env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
+            "--audio" => {
+                options.audio = args
+                    .next()
+                    .ok_or("--audio needs synthesized or cached")?
+                    .parse()?;
+            }
             "--frames" => {
                 let value = args.next().ok_or("--frames needs a positive integer")?;
                 options.frames = Some(
@@ -81,7 +89,7 @@ fn execute() -> Result<(), String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: frame [--frames N] [--unpaced] [--snapshot FILE.bmp] [--record FILE] [--trace FILE]\n       frame --replay FILE\n       frame --verify FILE"
+                    "Usage: frame [--audio synthesized|cached] [--frames N] [--unpaced] [--snapshot FILE.bmp] [--record FILE] [--trace FILE]\n       frame [--audio synthesized|cached] --replay FILE\n       frame [--audio synthesized|cached] --verify FILE\nAudio defaults to synthesized (continuous waveform phase)."
                 );
                 print_controls();
                 return Ok(());
@@ -110,7 +118,10 @@ fn execute() -> Result<(), String> {
         let frames = recording.frames();
         let mut game = Adventure::default();
         game.recording = Some(RefCell::new(recording));
-        let mut host = PlaybackHost::new(SdlHardware::new(true, None)?, frames);
+        let mut host = PlaybackHost::new(
+            SdlHardware::with_audio_mode(true, None, options.audio)?,
+            frames,
+        );
         print_controls();
         game.run(&mut host)?;
         return Ok(());
@@ -131,7 +142,10 @@ fn execute() -> Result<(), String> {
         let frames = records.last().ok_or("empty trace")?.at.frame;
         let mut game = Adventure::default();
         game.trace = Some(RefCell::new(Session::replay(records)?));
-        let mut host = PlaybackHost::new(SdlHardware::new(true, None)?, frames);
+        let mut host = PlaybackHost::new(
+            SdlHardware::with_audio_mode(true, None, options.audio)?,
+            frames,
+        );
         print_controls();
         let result = game.run(&mut host);
         if host.interrupted() {
@@ -143,7 +157,11 @@ fn execute() -> Result<(), String> {
     }
 
     // SDL owns presentation and input; the port owns game state and the original call order.
-    let mut hardware = SdlHardware::new(!options.unpaced, options.frames.map(NonZeroUsize::get))?;
+    let mut hardware = SdlHardware::with_audio_mode(
+        !options.unpaced,
+        options.frames.map(NonZeroUsize::get),
+        options.audio,
+    )?;
     print_controls();
     let mut game = Adventure::default();
     if let Some(path) = options.record {

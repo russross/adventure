@@ -179,3 +179,48 @@ fn complete_pictures_match_pixel_reference_at_seams_and_hidden_overlaps() {
         }
     }
 }
+
+// Invisible geometry changes still invalidate a retained picture's collision result.
+#[test]
+fn retained_pictures_restore_contacts_and_repaint_hidden_geometry_changes() {
+    let mut video = Video::default();
+    let mut picture = Picture {
+        appearance: Appearance {
+            foreground: 28,
+            background: 28,
+            walls_in_front: true,
+            player_width: 4,
+            ..Appearance::default()
+        },
+        walls: [PlayfieldRow::new(0xf0, 0xff, 0xff); HEIGHT],
+        player_visible: [true; HEIGHT],
+        objects: [Object {
+            line: ObjectLine {
+                color: 28,
+                ..ObjectLine::default()
+            },
+            rows: [0xff; HEIGHT],
+        }; 2],
+        ..Picture::default()
+    };
+    video.paint(&picture);
+    let expected = video.contacts;
+    let pixels = video.frame.pixels.clone();
+    assert!(expected.objects_touch && expected.player_walls);
+    video.contacts = Contacts::default();
+    video.paint(&picture);
+    assert_eq!(video.contacts, expected);
+    assert_eq!(video.frame.painted_lines, HEIGHT);
+
+    picture.objects[0].rows.fill(0);
+    video.paint(&picture);
+    assert_eq!(video.frame.pixels, pixels);
+    assert!(!video.contacts.objects_touch);
+    assert!(!video.contacts.player_objects[0]);
+    picture.appearance.foreground = 72;
+    video.paint(&picture);
+    assert_eq!(video.frame.pixels, vec![72; WIDTH * HEIGHT]);
+    video.paint(&Picture::default());
+    assert_eq!(video.contacts, Contacts::default());
+    assert!(video.frame.pixels.iter().all(|pixel| *pixel == 0));
+}

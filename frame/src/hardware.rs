@@ -6,16 +6,18 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sdl2::audio::{AudioQueue, AudioSpecDesired};
+use sdl2::audio::{AudioCallback, AudioDevice, AudioSpecDesired};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::keyboard::{Keycode, Mod};
-use sdl2::pixels::PixelFormatEnum;
-use sdl2::render::Canvas;
+use sdl2::pixels::{Color, PixelFormat, PixelFormatEnum};
+use sdl2::rect::Rect;
+use sdl2::render::{Canvas, Texture};
 use sdl2::surface::Surface;
 use sdl2::video::Window;
 
 use crate::input::{Controls, Difficulty, Direction, Joystick};
-use crate::sound::{Sound, Synthesizer};
+use crate::sound::{AudioMode, EffectPlayer, Sound};
+use crate::streaming_audio::StreamingAudio;
 use crate::video::{Frame, HEIGHT, WIDTH};
 
 // Double the horizontal pixels to preserve the console's displayed proportions.
@@ -80,23 +82,32 @@ impl KeyboardConsole {
 pub struct SdlHardware {
     _sdl: sdl2::Sdl,
     canvas: Canvas<Window>,
+    texture: Texture,
     events: sdl2::EventPump,
     keyboard: KeyboardConsole,
     next_frame: Instant,
     paced: bool,
     frames: usize,
     frame_limit: Option<usize>,
-    rgb: Vec<u8>,
-    audio: AudioQueue<f32>,
-    synthesizer: Synthesizer,
-    samples: Vec<f32>,
-    sample_rate: u32,
-    sample_remainder: u32,
+    pixels: TexturePixels,
+    indexed: Option<Vec<u8>>,
+    refresh: DisplayRefresh,
+    #[cfg(test)]
+    redraws: usize,
+    audio: AudioOutput,
     muted: bool,
 }
 
 impl SdlHardware {
     pub fn new(paced: bool, frame_limit: Option<usize>) -> Result<Self, String> {
+        Self::with_audio_mode(paced, frame_limit, AudioMode::default())
+    }
+
+    pub fn with_audio_mode(
+        paced: bool,
+        frame_limit: Option<usize>,
+        mode: AudioMode,
+    ) -> Result<Self, String> {
         let sdl = sdl2::init()?;
         let video = sdl.video()?;
         let window = video
@@ -105,62 +116,77 @@ impl SdlHardware {
             .resizable()
             .build()
             .map_err(|error| error.to_string())?;
+        // Default SDL selection prefers acceleration but permits a software fallback.
+        // Vsync stays disabled so the host retains its single explicit pacing point.
         let mut canvas = window
             .into_canvas()
-            .software()
             .build()
             .map_err(|error| error.to_string())?;
         canvas
             .set_logical_size(WINDOW_WIDTH, WINDOW_HEIGHT)
             .map_err(|error| error.to_string())?;
+        // SDL's canvas-owned texture is released with this renderer. It is private and
+        // used only with this canvas; no manual texture destruction is necessary.
+        let pixels = TexturePixels::new(&canvas.info().texture_formats)?;
+        let texture = pixels.create_texture(&mut canvas)?;
         let events = sdl.event_pump()?;
-        // Queue one picture's worth of mono audio at each vertical boundary.
-        // SDL consumes it independently; game execution stays on the main thread.
-        let audio = sdl
-            .audio()?
-            .open_queue::<f32, _>(
-                None,
-                &AudioSpecDesired {
-                    freq: Some(48_000),
-                    channels: Some(1),
-                    samples: Some(512),
-                },
-            )
-            .map_err(|error| format!("cannot open audio output: {error}"))?;
-        let sample_rate = u32::try_from(audio.spec().freq)
-            .ok()
-            .and_then(NonZeroU32::new)
-            .ok_or("invalid SDL audio sample rate")?;
-        let synthesizer = Synthesizer::new(sample_rate);
-        audio.resume();
+        // Only the selected output path allocates its device and synthesis state.
+        let audio_subsystem = sdl.audio()?;
+        let audio = match mode {
+            AudioMode::Synthesized => {
+                AudioOutput::Synthesized(StreamingAudio::new(&audio_subsystem)?)
+            }
+            AudioMode::Cached => AudioOutput::Cached(
+                audio_subsystem
+                    .open_playback(
+                        None,
+                        &AudioSpecDesired {
+                            freq: Some(48_000),
+                            channels: Some(1),
+                            samples: Some(512),
+                        },
+                        |spec| {
+                            let rate = NonZeroU32::new(spec.freq as u32)
+                                .expect("SDL supplies a positive audio sample rate");
+                            EffectPlayer::new(rate)
+                        },
+                    )
+                    .map_err(|error| format!("cannot open audio output: {error}"))?,
+            ),
+        };
         Ok(Self {
             _sdl: sdl,
             canvas,
+            texture,
             events,
             keyboard: KeyboardConsole::default(),
             next_frame: Instant::now(),
             paced,
             frames: 0,
             frame_limit,
-            rgb: vec![0; WIDTH * HEIGHT * 3],
+            pixels,
+            indexed: None,
+            refresh: DisplayRefresh::Redraw,
+            #[cfg(test)]
+            redraws: 0,
             audio,
-            synthesizer,
-            samples: Vec::with_capacity(sample_rate.get() as usize / 60 + 1),
-            sample_rate: sample_rate.get(),
-            sample_remainder: 0,
             muted: false,
         })
     }
 
     pub fn save_snapshot(&mut self, path: &Path) -> Result<(), String> {
+        let pitch = self.pixels.pitch() as u32;
         let surface = Surface::from_data(
-            &mut self.rgb,
+            &mut self.pixels.bytes,
             WIDTH as u32,
             HEIGHT as u32,
-            WIDTH as u32 * 3,
-            PixelFormatEnum::RGB24,
+            pitch,
+            self.pixels.format,
         )?;
-        surface.save_bmp(path)
+        // Export the established 24-bit BMP format independently of the renderer's upload layout.
+        surface
+            .convert_format(PixelFormatEnum::RGB24)?
+            .save_bmp(path)
     }
 
     pub fn is_muted(&self) -> bool {
@@ -175,6 +201,7 @@ impl SdlHardware {
 impl FrameHost for SdlHardware {
     fn sample_controls(&mut self) -> Result<Option<Controls>, String> {
         for event in self.events.poll_iter() {
+            self.refresh.observe(&event);
             match event {
                 Event::Quit { .. } => return Ok(None),
                 Event::Window {
@@ -193,16 +220,10 @@ impl FrameHost for SdlHardware {
                         return Ok(None);
                     }
                     // Host shortcuts never reach the game's console/joystick state.
-                    // Clear pending sound immediately, but keep synthesis running.
+                    // Playback observes mute at the next presentation boundary.
                     match key {
                         Keycode::M => {
                             self.muted = !self.muted;
-                            self.audio.clear();
-                            if self.muted {
-                                self.audio.pause();
-                            } else {
-                                self.audio.resume();
-                            }
                         }
                         Keycode::Num1 | Keycode::Num2 | Keycode::Num3 => {
                             let scale = match key {
@@ -214,6 +235,7 @@ impl FrameHost for SdlHardware {
                                 .window_mut()
                                 .set_size(WINDOW_WIDTH * scale, WINDOW_HEIGHT * scale)
                                 .map_err(|error| error.to_string())?;
+                            self.refresh.redraw();
                         }
                         _ => self.keyboard.key_down(key),
                     }
@@ -237,40 +259,42 @@ impl FrameHost for SdlHardware {
             return Ok(None);
         };
 
-        // Keep fractional samples across frames if SDL supplies a rate not divisible
-        // by 60. Oscillator phase continues even when an unpaced run outruns playback.
-        self.sample_remainder += self.sample_rate;
-        self.samples
-            .resize((self.sample_remainder / 60) as usize, 0.0);
-        self.sample_remainder %= 60;
-        self.synthesizer.render(sound, &mut self.samples);
-        if self.audio.size() > self.sample_rate / 60 * 3 * size_of::<f32>() as u32 {
-            self.audio.clear();
-        }
-        if !self.muted {
-            self.audio.queue_audio(&self.samples)?;
-        }
+        self.audio.present(sound, self.muted)?;
 
-        // Expand indexed colors only when the complete picture reaches the SDL boundary.
-        for (pixel, color) in self
-            .rgb
-            .as_chunks_mut::<3>()
-            .0
-            .iter_mut()
-            .zip(&frame.pixels)
-        {
-            pixel.copy_from_slice(&rgb_color(*color));
+        // Device resets require a new texture and a complete upload even for unchanged pixels.
+        if self.refresh == DisplayRefresh::RecreateTexture {
+            self.texture = self.pixels.create_texture(&mut self.canvas)?;
+            self.indexed = None;
+            self.refresh = DisplayRefresh::Redraw;
         }
-        let creator = self.canvas.texture_creator();
-        let mut texture = creator
-            .create_texture_streaming(PixelFormatEnum::RGB24, WIDTH as u32, HEIGHT as u32)
-            .map_err(|error| error.to_string())?;
-        texture
-            .update(None, &self.rgb, WIDTH * 3)
-            .map_err(|error| error.to_string())?;
-        self.canvas.clear();
-        self.canvas.copy(&texture, None, None)?;
-        self.canvas.present();
+        let spans = self
+            .pixels
+            .convert_changed_rows(&frame.pixels, self.indexed.as_deref());
+        for &(first, end) in &spans {
+            let pitch = self.pixels.pitch();
+            self.texture
+                .update(
+                    Rect::new(0, first as i32, WIDTH as u32, (end - first) as u32),
+                    &self.pixels.bytes[first * pitch..end * pitch],
+                    pitch,
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        self.indexed
+            .get_or_insert_with(|| vec![0; WIDTH * HEIGHT])
+            .copy_from_slice(&frame.pixels);
+        // Each redraw rebuilds the transient backbuffer; idle boundaries leave the window alone.
+        if !spans.is_empty() || self.refresh != DisplayRefresh::Clean {
+            self.refresh.redraw();
+            self.canvas.clear();
+            self.canvas.copy(&self.texture, None, None)?;
+            self.canvas.present();
+            self.refresh = DisplayRefresh::Clean;
+            #[cfg(test)]
+            {
+                self.redraws += 1;
+            }
+        }
         self.frames += 1;
 
         // No scanline sleeps or renderer vsync: this is the only pacing point.
@@ -283,6 +307,163 @@ impl FrameHost for SdlHardware {
             }
         }
         Ok(Some(controls))
+    }
+}
+
+// Continuous output follows the picture clock; cached output follows callback time.
+enum AudioOutput {
+    Synthesized(StreamingAudio),
+    Cached(AudioDevice<EffectPlayer>),
+}
+
+impl AudioOutput {
+    fn present(&mut self, sound: &Sound, muted: bool) -> Result<(), String> {
+        match self {
+            Self::Synthesized(audio) => audio.present(sound, muted),
+            Self::Cached(device) => {
+                let idle = {
+                    let mut player = device.lock();
+                    player.update(sound, muted);
+                    player.idle()
+                };
+                if idle {
+                    device.pause();
+                } else {
+                    device.resume();
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl AudioCallback for EffectPlayer {
+    type Channel = f32;
+
+    fn callback(&mut self, output: &mut [f32]) {
+        self.render(output);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DisplayRefresh {
+    Clean,
+    Redraw,
+    RecreateTexture,
+}
+
+impl DisplayRefresh {
+    fn redraw(&mut self) {
+        if *self == Self::Clean {
+            *self = Self::Redraw;
+        }
+    }
+
+    // A device reset dominates redraw requests until the texture is replaced.
+    fn observe(&mut self, event: &Event) {
+        match event {
+            Event::RenderDeviceReset { .. } => *self = Self::RecreateTexture,
+            Event::RenderTargetsReset { .. } => self.redraw(),
+            Event::Window {
+                win_event:
+                    WindowEvent::Shown
+                    | WindowEvent::Exposed
+                    | WindowEvent::Resized(..)
+                    | WindowEvent::SizeChanged(..)
+                    | WindowEvent::Restored
+                    | WindowEvent::Maximized
+                    | WindowEvent::DisplayChanged(..),
+                ..
+            } => self.redraw(),
+            _ => {}
+        }
+    }
+}
+
+struct TexturePixels {
+    format: PixelFormatEnum,
+    palette: [[u8; 4]; 128],
+    bytes: Vec<u8>,
+}
+
+impl TexturePixels {
+    fn new(supported: &[PixelFormatEnum]) -> Result<Self, String> {
+        let format = supported
+            .iter()
+            .copied()
+            .find(|format| {
+                matches!(
+                    format,
+                    PixelFormatEnum::ARGB8888
+                        | PixelFormatEnum::ABGR8888
+                        | PixelFormatEnum::RGBA8888
+                        | PixelFormatEnum::BGRA8888
+                        | PixelFormatEnum::RGB888
+                        | PixelFormatEnum::BGR888
+                )
+            })
+            .unwrap_or(PixelFormatEnum::RGB24);
+        let pixel_format = PixelFormat::try_from(format)?;
+        let palette = std::array::from_fn(|index| {
+            let [r, g, b] = rgb_color((index * 2) as u8);
+            if format == PixelFormatEnum::RGB24 {
+                [r, g, b, 0]
+            } else {
+                Color::RGBA(r, g, b, 255)
+                    .to_u32(&pixel_format)
+                    .to_ne_bytes()
+            }
+        });
+        // Store opaque black before the first picture so pre-presentation snapshots remain valid.
+        let mut bytes = vec![0; WIDTH * HEIGHT * format.byte_size_per_pixel()];
+        for pixel in bytes.chunks_mut(format.byte_size_per_pixel()) {
+            pixel.copy_from_slice(&palette[0][..pixel.len()]);
+        }
+        Ok(Self {
+            format,
+            palette,
+            bytes,
+        })
+    }
+
+    fn pitch(&self) -> usize {
+        WIDTH * self.format.byte_size_per_pixel()
+    }
+
+    fn create_texture(&self, canvas: &mut Canvas<Window>) -> Result<Texture, String> {
+        canvas
+            .create_texture_streaming(self.format, WIDTH as u32, HEIGHT as u32)
+            .map_err(|error| error.to_string())
+    }
+
+    fn convert_changed_rows(
+        &mut self,
+        pixels: &[u8],
+        previous: Option<&[u8]>,
+    ) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        let mut start = None;
+        let stride = self.format.byte_size_per_pixel();
+        let pitch = self.pitch();
+        // Compare complete indexed rows so palette changes and erasures follow the same path.
+        for row in 0..HEIGHT {
+            let range = row * WIDTH..(row + 1) * WIDTH;
+            if previous.is_none_or(|old| old[range.clone()] != pixels[range.clone()]) {
+                start.get_or_insert(row);
+                for (output, color) in self.bytes[row * pitch..(row + 1) * pitch]
+                    .chunks_mut(stride)
+                    .zip(&pixels[range])
+                {
+                    output.copy_from_slice(&self.palette[usize::from(*color >> 1)][..stride]);
+                }
+            } else if let Some(first) = start.take() {
+                spans.push((first, row));
+            }
+        }
+        if let Some(first) = start {
+            spans.push((first, HEIGHT));
+        }
+        spans
     }
 }
 

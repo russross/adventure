@@ -1,12 +1,10 @@
 //! SDL picture/audio presentation and controls. Frame pacing occurs only at vertical sync.
 
 use std::collections::HashSet;
-use std::num::NonZeroU32;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sdl2::audio::{AudioCallback, AudioDevice, AudioSpecDesired};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::keyboard::{Keycode, Mod};
 use sdl2::pixels::{Color, PixelFormat, PixelFormatEnum};
@@ -16,7 +14,8 @@ use sdl2::surface::Surface;
 use sdl2::video::Window;
 
 use crate::input::{Controls, Difficulty, Direction, Joystick};
-use crate::sound::{EffectPlayer, Sound};
+use crate::sound::Sound;
+use crate::streaming_audio::StreamingAudio;
 use crate::video::{Frame, HEIGHT, WIDTH};
 
 // Double the horizontal pixels to preserve the console's displayed proportions.
@@ -93,7 +92,7 @@ pub struct SdlHardware {
     refresh: DisplayRefresh,
     #[cfg(test)]
     redraws: usize,
-    audio: AudioDevice<EffectPlayer>,
+    audio: StreamingAudio,
     muted: bool,
 }
 
@@ -121,24 +120,8 @@ impl SdlHardware {
         let pixels = TexturePixels::new(&canvas.info().texture_formats)?;
         let texture = pixels.create_texture(&mut canvas)?;
         let events = sdl.event_pump()?;
-        // Build the finite sound bank at the actual device rate. Playback starts
-        // paused; the callback copies cached samples only while an effect is active.
-        let audio = sdl
-            .audio()?
-            .open_playback(
-                None,
-                &AudioSpecDesired {
-                    freq: Some(48_000),
-                    channels: Some(1),
-                    samples: Some(512),
-                },
-                |spec| {
-                    let rate = NonZeroU32::new(spec.freq as u32)
-                        .expect("SDL supplies a positive audio sample rate");
-                    EffectPlayer::new(rate)
-                },
-            )
-            .map_err(|error| format!("cannot open audio output: {error}"))?;
+        // One persistent synthesizer retains phase through effects, silence, and mute.
+        let audio = StreamingAudio::new(&sdl.audio()?)?;
         Ok(Self {
             _sdl: sdl,
             canvas,
@@ -244,18 +227,7 @@ impl FrameHost for SdlHardware {
             return Ok(None);
         };
 
-        // Deliver commands under SDL's callback lock. Wait for the transition tail
-        // to reach zero before pausing, so silence and mute never truncate a ramp.
-        let idle = {
-            let mut player = self.audio.lock();
-            player.update(sound, self.muted);
-            player.idle()
-        };
-        if idle {
-            self.audio.pause();
-        } else {
-            self.audio.resume();
-        }
+        self.audio.present(sound, self.muted)?;
 
         // Device resets require a new texture and a complete upload even for unchanged pixels.
         if self.refresh == DisplayRefresh::RecreateTexture {
@@ -303,14 +275,6 @@ impl FrameHost for SdlHardware {
             }
         }
         Ok(Some(controls))
-    }
-}
-
-impl AudioCallback for EffectPlayer {
-    type Channel = f32;
-
-    fn callback(&mut self, output: &mut [f32]) {
-        self.render(output);
     }
 }
 
