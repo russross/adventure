@@ -1,8 +1,7 @@
 //! Optional trace observations and recorded input decoding for validation.
 
 use adventure_trace::{
-    ContactTarget, Control, Counter, Game as TraceGame, Mode, Object, Observation, Point, State,
-    Target,
+    ContactTarget, Counter, Game as TraceGame, Mode, Object, Observation, Point, State, Target,
 };
 
 use super::Direction;
@@ -68,16 +67,6 @@ impl Adventure {
             trace.borrow_mut().observe(observation);
         }
     }
-    // Ordinary play returns live input unchanged. Playback supplies input without changing world state.
-    pub(super) fn input_value(&self, control: Control, live: u8) -> u8 {
-        let live = self.session.recording.as_ref().map_or(live, |recording| {
-            recording.borrow_mut().input(control, live)
-        });
-        self.session
-            .trace()
-            .map_or(live, |trace| trace.borrow_mut().input(control, live))
-    }
-
     // Each checkpoint observes complete records, including those outside the displayed room.
     pub(super) fn trace_checkpoint(&self) {
         if self.session.trace().is_none() {

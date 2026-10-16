@@ -1,4 +1,4 @@
-//! World simulation, picture scheduling, rendering, and immutable game data.
+//! Game state, startup, and explicit picture scheduling.
 
 use crate::input::{Controls, Direction};
 use crate::runtime::{FrameHost, Runtime};
@@ -446,7 +446,7 @@ impl GateState {
         }
     }
 
-    // Entry can stop the animation before its next tick. The endpoints retain their encoded values.
+    // Entry can stop animation before its next tick; repeated key contact can skip opening completion.
     fn advance_animation(self) -> Self {
         match self {
             Self::Open | Self::Closed => self,
@@ -763,12 +763,7 @@ impl Adventure {
             return self.session.finish();
         }
         while self.advance_picture(host)? {
-            if let Some(recording) = &self.session.recording {
-                recording.borrow().check()?;
-            }
-            if let Some(trace) = self.session.trace() {
-                trace.borrow().check()?;
-            }
+            self.session.check()?;
         }
         self.session.finish()
     }
@@ -784,19 +779,7 @@ impl Adventure {
         self.display = PreparedDisplay::default();
         self.scheduler.player_visible = false;
         self.sound = Sound::default();
-        if self
-            .session
-            .recording
-            .as_ref()
-            .is_some_and(|recording| recording.borrow().stopped_at_boot())
-        {
-            return Ok(false);
-        }
-        if self
-            .session
-            .trace()
-            .is_some_and(|trace| trace.borrow().stopped_at_boot())
-        {
+        if self.session.stopped_at_boot() {
             return Ok(false);
         }
         let Some(controls) = host.sample_controls()? else {
@@ -906,12 +889,7 @@ impl Adventure {
         match host.present(&self.video.frame, &self.sound)? {
             Some(controls) => {
                 self.controls = controls;
-                if let Some(recording) = &self.session.recording {
-                    recording.borrow_mut().next_frame();
-                }
-                if let Some(trace) = self.session.trace() {
-                    trace.borrow_mut().next_frame();
-                }
+                self.session.next_frame();
                 Ok(true)
             }
             None => Ok(false),

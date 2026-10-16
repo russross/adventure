@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use adventure_trace::Session;
+use adventure_trace::{Control, Session};
 
 use crate::input::Controls;
 use crate::recording::Recording;
@@ -64,7 +64,11 @@ impl Runtime {
             return Err("validation requires a trace session".into());
         };
         let trace = match session {
-            TraceSession::Observed(trace) | TraceSession::Validated { trace, .. } => trace,
+            TraceSession::Observed(trace) => trace,
+            validated @ TraceSession::Validated { .. } => {
+                self.trace = Some(validated);
+                return Ok(());
+            }
         };
         let result = Validation::attach(&mut trace.borrow_mut());
         match result {
@@ -80,6 +84,44 @@ impl Runtime {
             }
         }
         Ok(())
+    }
+
+    // Recordings and semantic replay supply values only at a game's logical input read.
+    pub(crate) fn input(&self, control: Control, live: u8) -> u8 {
+        let live = self.recording.as_ref().map_or(live, |recording| {
+            recording.borrow_mut().input(control, live)
+        });
+        self.trace()
+            .map_or(live, |trace| trace.borrow_mut().input(control, live))
+    }
+
+    pub(crate) fn stopped_at_boot(&self) -> bool {
+        self.recording
+            .as_ref()
+            .is_some_and(|recording| recording.borrow().stopped_at_boot())
+            || self
+                .trace()
+                .is_some_and(|trace| trace.borrow().stopped_at_boot())
+    }
+
+    pub(crate) fn check(&self) -> Result<(), String> {
+        if let Some(recording) = &self.recording {
+            recording.borrow().check()?;
+        }
+        if let Some(trace) = self.trace() {
+            trace.borrow().check()?;
+        }
+        Ok(())
+    }
+
+    // Only accepted presentation boundaries advance either session's clock.
+    pub(crate) fn next_frame(&self) {
+        if let Some(recording) = &self.recording {
+            recording.borrow_mut().next_frame();
+        }
+        if let Some(trace) = self.trace() {
+            trace.borrow_mut().next_frame();
+        }
     }
 
     // Validation finishes preceding game work before the host accepts another picture.

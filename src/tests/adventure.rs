@@ -1142,6 +1142,22 @@ fn recording_is_observational_for_pictures_audio_contacts_and_world_state() {
 
 #[test]
 #[cfg(feature = "validation")]
+fn enabling_validation_again_preserves_an_active_oracle() {
+    let mut game = Adventure::default();
+    game.session.set_trace(Session::record());
+    game.session.enable_validation().unwrap();
+    let mut host = crate::replay::ReplayHost::new(12);
+    assert!(game.power_on(&mut host).unwrap());
+    for _ in 0..6 {
+        assert!(game.advance_picture(&mut host).unwrap());
+    }
+    game.session.enable_validation().unwrap();
+    while game.advance_picture(&mut host).unwrap() {}
+    game.session.finish().unwrap();
+}
+
+#[test]
+#[cfg(feature = "validation")]
 fn long_live_sessions_validate_against_original_cartridge() {
     struct Bounded(TraceHost);
     impl FrameHost for Bounded {

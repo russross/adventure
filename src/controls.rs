@@ -6,30 +6,40 @@ use adventure_trace::Control;
 
 impl Adventure {
     pub(super) fn read_reset(&mut self) -> bool {
-        self.controls.reset = self.input_value(Control::Reset, u8::from(self.controls.reset)) != 0;
+        self.controls.reset = self
+            .session
+            .input(Control::Reset, u8::from(self.controls.reset))
+            != 0;
         self.controls.reset
     }
 
     pub(super) fn read_select(&mut self) -> bool {
-        self.controls.select =
-            self.input_value(Control::Select, u8::from(self.controls.select)) != 0;
+        self.controls.select = self
+            .session
+            .input(Control::Select, u8::from(self.controls.select))
+            != 0;
         self.controls.select
     }
 
     // A read can consume a recorded value during playback; subsequent queries see that value.
     pub(super) fn read_color(&mut self) -> bool {
-        self.controls.color = self.input_value(Control::Color, u8::from(self.controls.color)) != 0;
+        self.controls.color = self
+            .session
+            .input(Control::Color, u8::from(self.controls.color))
+            != 0;
         self.controls.color
     }
 
     pub(super) fn read_fire(&mut self) -> bool {
-        self.controls.left.fire =
-            self.input_value(Control::Fire, u8::from(self.controls.left.fire)) != 0;
+        self.controls.left.fire = self
+            .session
+            .input(Control::Fire, u8::from(self.controls.left.fire))
+            != 0;
         self.controls.left.fire
     }
 
     pub(super) fn read_left_direction(&mut self) -> Direction {
-        self.controls.left.direction = decode_direction(self.input_value(
+        self.controls.left.direction = decode_direction(self.session.input(
             Control::LeftDirection,
             encode_direction(self.controls.left.direction),
         ));
@@ -37,7 +47,7 @@ impl Adventure {
     }
 
     pub(super) fn read_right_direction(&mut self) -> Direction {
-        self.controls.right.direction = decode_direction(self.input_value(
+        self.controls.right.direction = decode_direction(self.session.input(
             Control::RightDirection,
             encode_direction(self.controls.right.direction),
         ));
@@ -46,7 +56,7 @@ impl Adventure {
 
     // Difficulty is sampled at the actor operation that uses it, rather than once per turn.
     pub(super) fn read_left_difficulty(&mut self) -> Difficulty {
-        self.controls.left_difficulty = decode_difficulty(self.input_value(
+        self.controls.left_difficulty = decode_difficulty(self.session.input(
             Control::LeftDifficulty,
             u8::from(self.controls.left_difficulty == Difficulty::A),
         ));
@@ -54,7 +64,7 @@ impl Adventure {
     }
 
     pub(super) fn read_right_difficulty(&mut self) -> Difficulty {
-        self.controls.right_difficulty = decode_difficulty(self.input_value(
+        self.controls.right_difficulty = decode_difficulty(self.session.input(
             Control::RightDifficulty,
             u8::from(self.controls.right_difficulty == Difficulty::A),
         ));
