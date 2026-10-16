@@ -15,7 +15,7 @@ use super::{
     Adventure, Bitmap, ColorChoice, DragonState, Game, GateId, OBJECT_IDS, ObjectDisplay, ObjectId,
     Position, Room, RoomEdge,
 };
-use crate::video::{Appearance, Geometry, HEIGHT, Picture, PlayfieldRow, SpriteWidth, WIDTH};
+use crate::video::{Appearance, HEIGHT, Picture, PlayfieldRow, SpriteWidth, WIDTH};
 use Exit::{ByGame, Fixed};
 use adventure_trace::Point;
 
@@ -37,9 +37,18 @@ impl Adventure {
             visible_widths,
         };
         self.scheduler.player_visible = player_rows[HEIGHT - 1];
-        let geometry = Geometry::prepare(&picture);
-        self.contacts = geometry.contacts();
-        self.video.compose(&picture, &geometry);
+        // Equal complete pictures retain hidden contacts as well as visible pixels.
+        if let Some((previous, contacts)) = &self.drawn
+            && *previous == picture
+        {
+            self.contacts = *contacts;
+            self.video.frame.changed_rows.clear();
+            return;
+        }
+        self.geometry.update(&picture);
+        self.contacts = self.geometry.contacts();
+        self.video.compose(&picture, &self.geometry);
+        self.drawn = Some((picture, self.contacts));
     }
 
     // Appearance and images are a snapshot, reused by the following two pictures.

@@ -216,6 +216,7 @@ fn reference_picture(picture: &Picture) -> (Vec<u8>, Contacts) {
 #[test]
 fn complete_pictures_match_pixel_reference_at_seams_and_hidden_overlaps() {
     let mut video = Video::default();
+    let mut geometry = Geometry::default();
     for (case, x) in [0u8, 1, 11, 148, 159, 160, 175, 255]
         .into_iter()
         .enumerate()
@@ -263,6 +264,12 @@ fn complete_pictures_match_pixel_reference_at_seams_and_hidden_overlaps() {
                                 };
                             }
                             let (pixels, contacts) = reference_picture(&picture);
+                            geometry.update(&picture);
+                            assert_eq!(
+                                geometry.contacts(),
+                                contacts,
+                                "retained geometry case {case}, batch {batch}"
+                            );
                             video.paint(&picture);
                             assert_eq!(video.frame.pixels, pixels, "case {case}, batch {batch}");
                             assert_eq!(video.contacts, contacts, "case {case}, batch {batch}");

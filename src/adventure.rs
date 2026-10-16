@@ -4,7 +4,8 @@ use crate::input::{Controls, Direction};
 use crate::runtime::{FrameHost, Runtime};
 use crate::sound::{Sound, SoundEffect};
 use crate::video::{
-    Appearance, Contacts, HEIGHT, Object, ObjectLine, PlayfieldRow, SpriteWidth, Video,
+    Appearance, Contacts, Geometry, HEIGHT, Object, ObjectLine, Picture, PlayfieldRow, SpriteWidth,
+    Video,
 };
 mod assets;
 mod original;
@@ -735,6 +736,8 @@ pub struct Adventure {
     pub session: Runtime,
     display: PreparedDisplay,
     contacts: Contacts,
+    geometry: Geometry,
+    drawn: Option<(Picture, Contacts)>,
     scheduler: Scheduler,
 }
 
@@ -776,6 +779,8 @@ impl Adventure {
         self.scheduler.phase = PicturePhase::Player;
         self.video = Video::default();
         self.contacts = Contacts::default();
+        self.geometry = Geometry::default();
+        self.drawn = None;
         self.display = PreparedDisplay::default();
         self.scheduler.player_visible = false;
         self.sound = Sound::default();

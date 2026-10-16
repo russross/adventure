@@ -49,10 +49,27 @@ struct GeometryRow {
 /// Complete geometric layers, independent of colors, priority, and pixel painting.
 pub struct Geometry {
     rows: [GeometryRow; HEIGHT],
+    source: Option<Picture>,
+}
+
+impl Default for Geometry {
+    fn default() -> Self {
+        Self {
+            rows: [GeometryRow::default(); HEIGHT],
+            source: None,
+        }
+    }
 }
 
 impl Geometry {
     pub fn prepare(picture: &Picture) -> Self {
+        let mut geometry = Self::default();
+        geometry.update(picture);
+        geometry
+    }
+
+    /// Rebuild affected coverage rows while retaining unchanged geometry, including hidden layers.
+    pub fn update(&mut self, picture: &Picture) {
         let appearance = picture.appearance;
         let mut player = Mask::default();
         for span in wrapped_spans(
@@ -76,7 +93,14 @@ impl Geometry {
         // Consecutive wall bands share their expansion. Sprites retain independent footprints.
         let mut cached_walls = None;
         let mut walls = Mask::default();
-        let rows = std::array::from_fn(|y| {
+        for y in 0..HEIGHT {
+            if self
+                .source
+                .as_ref()
+                .is_some_and(|previous| previous.same_geometry_row(picture, y))
+            {
+                continue;
+            }
             if cached_walls != Some(picture.walls[y]) {
                 walls = Mask::default();
                 for x in 0..WIDTH {
@@ -124,9 +148,9 @@ impl Geometry {
                 row.objects = row.objects.map(|mask| mask.without(hidden));
                 row.barriers = row.barriers.map(|mask| mask.without(hidden));
             }
-            row
-        });
-        Self { rows }
+            self.rows[y] = row;
+        }
+        self.source = Some(*picture);
     }
 
     /// Detect every overlap, including objects hidden by foreground priority.
@@ -235,6 +259,30 @@ impl Default for Picture {
             player_visible: [false; HEIGHT],
             visible_widths: [WIDTH as u8; HEIGHT],
         }
+    }
+}
+
+impl Picture {
+    // Positions and widths matter only on occupied rows; colors never change coverage.
+    fn same_geometry_row(&self, other: &Self, y: usize) -> bool {
+        self.visible_widths[y] == other.visible_widths[y]
+            && self.appearance.barriers == other.appearance.barriers
+            && self.appearance.mirrored == other.appearance.mirrored
+            && self.walls[y] == other.walls[y]
+            && self.player_visible[y] == other.player_visible[y]
+            && (!self.player_visible[y]
+                || self.player_x == other.player_x
+                    && self.appearance.player_width == other.appearance.player_width)
+            && self
+                .objects
+                .iter()
+                .zip(&other.objects)
+                .all(|(first, second)| {
+                    first.rows[y] == second.rows[y]
+                        && (first.rows[y] == 0
+                            || first.line.x == second.line.x
+                                && first.line.width == second.line.width)
+                })
     }
 }
 

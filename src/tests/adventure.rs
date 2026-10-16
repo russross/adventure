@@ -309,6 +309,27 @@ fn bridge_rollback_pickup_and_carried_offsets_match_rom() {
 }
 
 #[test]
+fn repeated_drawing_restores_contacts_and_skips_unchanged_composition() {
+    let mut game = initialized(Game::One);
+    game.world.player = Position::new(Room::GoldCastle, 32, 64);
+    game.prepare_room_display();
+    game.draw_room();
+    // Stabilize the player's retained leading-row visibility before comparing pictures.
+    game.draw_room();
+    let expected = game.contacts;
+    assert!(expected.player_objects.into_iter().any(|contact| contact));
+    game.contacts = Contacts::default();
+    game.draw_room();
+    assert_eq!(game.contacts, expected);
+    assert!(game.video.frame.changed_rows.is_empty());
+
+    game.world.player.x = 80;
+    game.draw_room();
+    assert!(!game.video.frame.changed_rows.is_empty());
+    assert_ne!(game.contacts, expected);
+}
+
+#[test]
 fn aligned_magnet_target_prevents_later_targets_from_moving() {
     let mut game = initialized(Game::One);
     game.world.magnet = Position::new(Room::WestHall, 70, 70);
