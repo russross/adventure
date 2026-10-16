@@ -30,7 +30,7 @@ clean: mostlyclean
 .PHONY: test
 # Build the reference through its workspace before checking the independent Python runtime.
 test: check
-	$(MAKE) -C .. frame-python-reference
+	$(MAKE) -C .. python-reference
 	$(UV) run --locked python3 -m unittest discover -s tests
 
 .PHONY: smoke

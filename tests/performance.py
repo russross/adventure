@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "target" / "performance.jsonl"
-PORTS = ("directport", "scanline", "frame")
+PORTS = ("adventure",)
 
 
 def metadata(output: Path = OUTPUT) -> None:
@@ -25,7 +25,7 @@ def metadata(output: Path = OUTPUT) -> None:
         "linkage": [
             "otool",
             "-L",
-            str(ROOT / "target/release/examples/frame_performance"),
+            str(ROOT / "target/release/examples/adventure_performance"),
         ],
     }
     versions = {
@@ -50,9 +50,8 @@ def metadata(output: Path = OUTPUT) -> None:
         Path(__file__).resolve(),
     ]
     paths.extend(ROOT.glob("tests/performance.rs"))
-    for port in (*PORTS, "trace"):
-        paths.extend((ROOT / port).rglob("*.rs"))
-        paths.append(ROOT / port / "Cargo.toml")
+    paths.extend((ROOT / "src").rglob("*.rs"))
+    paths.extend((ROOT / "src").rglob("Cargo.toml"))
     for path in sorted(paths):
         sources[str(path.relative_to(ROOT))] = hashlib.sha256(
             path.read_bytes()
@@ -171,20 +170,20 @@ def compare_audio() -> None:
         raise RuntimeError(f"move or remove previous results before running: {output}")
     metadata(output)
     subprocess.run(
-        [str(ROOT / "target/release/examples/frame_performance"), "headless"],
+        [str(ROOT / "target/release/examples/adventure_performance"), "headless"],
         check=True,
     )
     for trial in range(1, 6):
         for mode in ("headless", "synthesis", "cached"):
-            measure("frame", mode, 10, trial, output)
+            measure("adventure", mode, 10, trial, output)
 
     # Reverse paired trial order to limit a persistent ordering bias between modes.
     measure("system", "baseline", 0, 1, output)
     for trial, modes in enumerate((("sdl", "sdl-cached"), ("sdl-cached", "sdl")), 1):
         for mode in modes:
-            measure("frame", mode, 1, trial, output)
+            measure("adventure", mode, 1, trial, output)
     for mode in ("idle-sdl", "idle-sdl-cached"):
-        measure("frame", mode, 1, 1, output)
+        measure("adventure", mode, 1, 1, output)
     measure("system", "baseline", 0, 2, output)
 
 

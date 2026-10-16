@@ -1,12 +1,18 @@
 use std::cell::RefCell;
 
+use adventure::adventure::Adventure;
+use adventure::hardware::FrameHost;
+use adventure::input::{Controls, Difficulty, Direction};
+use adventure::replay::ReplayHost;
+use adventure::sound::Sound;
+use adventure::validation::Validation;
+use adventure::video::Frame;
 use adventure_trace::{Record, Session};
-use directport::adventure::Adventure;
-use directport::hardware::FrameHost;
-use directport::input::{Controls, Difficulty, Direction};
-use directport::replay::ReplayHost;
-use directport::sound::Sound;
-use directport::tia::Frame;
+
+pub fn attach_validation(game: &mut Adventure) {
+    game.validation =
+        Some(Validation::attach(&mut game.trace.as_ref().unwrap().borrow_mut()).unwrap());
+}
 
 // Keep the recorded complete playthrough independent of generated test inputs.
 pub fn easy_playthrough() -> Vec<Record> {
@@ -70,11 +76,11 @@ impl ScriptedHost {
             } else {
                 Difficulty::B
             },
-            left: directport::input::Joystick {
+            left: adventure::input::Joystick {
                 direction,
                 fire: f % 19 < 3,
             },
-            right: directport::input::Joystick {
+            right: adventure::input::Joystick {
                 direction: Direction {
                     up: f.is_multiple_of(41),
                     ..Direction::default()
@@ -88,11 +94,7 @@ impl FrameHost for ScriptedHost {
     fn sample_controls(&mut self) -> Result<Option<Controls>, String> {
         Ok(Some(self.controls()))
     }
-    fn vertical_sync(
-        &mut self,
-        _frame: &Frame,
-        _sound: &Sound,
-    ) -> Result<Option<Controls>, String> {
+    fn present(&mut self, _frame: &Frame, _sound: &Sound) -> Result<Option<Controls>, String> {
         if self.frame == self.limit {
             return Ok(None);
         }
@@ -101,12 +103,11 @@ impl FrameHost for ScriptedHost {
     }
 }
 pub fn record(game: u8, frames: u64, seed: u64) -> (Adventure, Vec<Record>) {
-    let mut game_state = Adventure {
-        trace: Some(RefCell::new(Session::record())),
-        ..Adventure::default()
-    };
+    let mut game_state = Adventure::default();
+    game_state.trace = Some(RefCell::new(Session::record()));
+    attach_validation(&mut game_state);
     game_state
-        .cartridge_entry(&mut ScriptedHost {
+        .run(&mut ScriptedHost {
             frame: 0,
             limit: frames,
             game,
@@ -126,11 +127,10 @@ pub fn record(game: u8, frames: u64, seed: u64) -> (Adventure, Vec<Record>) {
 }
 pub fn replay(records: Vec<Record>) -> Result<Adventure, String> {
     let frames = records.last().unwrap().at.frame;
-    let mut game = Adventure {
-        trace: Some(RefCell::new(Session::replay(records)?)),
-        ..Adventure::default()
-    };
-    game.cartridge_entry(&mut ReplayHost::new(frames))?;
+    let mut game = Adventure::default();
+    game.trace = Some(RefCell::new(Session::replay(records)?));
+    attach_validation(&mut game);
+    game.run(&mut ReplayHost::new(frames))?;
     Ok(game)
 }
 
@@ -141,11 +141,7 @@ pub fn record_castle() -> (Adventure, Vec<Record>) {
         fn sample_controls(&mut self) -> Result<Option<Controls>, String> {
             Ok(Some(Controls::default()))
         }
-        fn vertical_sync(
-            &mut self,
-            _frame: &Frame,
-            _sound: &Sound,
-        ) -> Result<Option<Controls>, String> {
+        fn present(&mut self, _frame: &Frame, _sound: &Sound) -> Result<Option<Controls>, String> {
             if self.0 == 270 {
                 return Ok(None);
             }
@@ -153,7 +149,7 @@ pub fn record_castle() -> (Adventure, Vec<Record>) {
             self.0 += 1;
             Ok(Some(Controls {
                 reset: f < 3,
-                left: directport::input::Joystick {
+                left: adventure::input::Joystick {
                     direction: Direction {
                         left: (6..54).contains(&f),
                         up: (57..90).contains(&f) || (183..252).contains(&f),
@@ -166,11 +162,10 @@ pub fn record_castle() -> (Adventure, Vec<Record>) {
             }))
         }
     }
-    let mut game = Adventure {
-        trace: Some(RefCell::new(Session::record())),
-        ..Adventure::default()
-    };
-    game.cartridge_entry(&mut Host(0)).unwrap();
+    let mut game = Adventure::default();
+    game.trace = Some(RefCell::new(Session::record()));
+    attach_validation(&mut game);
+    game.run(&mut Host(0)).unwrap();
     let records = game.trace.as_ref().unwrap().borrow().records().to_vec();
     (game, records)
 }

@@ -1,4 +1,4 @@
-// Shared example body keeps benchmark workloads and termination identical across ports.
+// Complete-trace workloads share the same input and stopping boundary.
 use std::cell::RefCell;
 use std::env;
 use std::hint::black_box;
@@ -61,23 +61,14 @@ impl Host {
     }
 }
 
-// Only the host trait's boundary name differs between the preserved translation and ports.
-macro_rules! implement_host {
-    ($boundary:ident) => {
-        impl FrameHost for Host {
-            fn sample_controls(&mut self) -> Result<Option<Controls>, String> {
-                Ok(Some(Controls::default()))
-            }
+impl FrameHost for Host {
+    fn sample_controls(&mut self) -> Result<Option<Controls>, String> {
+        Ok(Some(Controls::default()))
+    }
 
-            fn $boundary(
-                &mut self,
-                frame: &Frame,
-                sound: &Sound,
-            ) -> Result<Option<Controls>, String> {
-                self.boundary(frame, sound)
-            }
-        }
-    };
+    fn present(&mut self, frame: &Frame, sound: &Sound) -> Result<Option<Controls>, String> {
+        self.boundary(frame, sound)
+    }
 }
 
 fn execute() -> Result<(), String> {
