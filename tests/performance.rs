@@ -16,27 +16,13 @@ use port::sound::{Sound, Synthesizer};
 enum Mode {
     Headless,
     Synthesis,
-    Cached,
     Sdl,
     IdleSdl,
-    SdlCached,
-    IdleSdlCached,
-}
-
-// Both sample-generation strategies receive the identical sound controls and picture budget.
-trait SampleRenderer {
-    fn render_picture(&mut self, sound: &Sound, samples: &mut [f32]);
-}
-
-impl SampleRenderer for Synthesizer {
-    fn render_picture(&mut self, sound: &Sound, samples: &mut [f32]) {
-        self.render(sound, samples);
-    }
 }
 
 struct Host {
     remaining: u64,
-    synthesis: Option<Box<dyn SampleRenderer>>,
+    synthesis: Option<Synthesizer>,
     samples: [f32; 800],
     sdl: Option<SdlHardware>,
 }
@@ -50,7 +36,7 @@ impl Host {
         self.remaining -= 1;
         black_box(&frame.pixels);
         if let Some(synthesizer) = &mut self.synthesis {
-            synthesizer.render_picture(sound, &mut self.samples);
+            synthesizer.render(sound, &mut self.samples);
             black_box(&self.samples);
         }
         if let Some(sdl) = &mut self.sdl {
@@ -76,14 +62,11 @@ fn execute() -> Result<(), String> {
     let mode = match args.next().as_deref() {
         Some("headless") => Mode::Headless,
         Some("synthesis") => Mode::Synthesis,
-        Some("cached") => Mode::Cached,
         Some("sdl") => Mode::Sdl,
         Some("idle-sdl") => Mode::IdleSdl,
-        Some("sdl-cached") => Mode::SdlCached,
-        Some("idle-sdl-cached") => Mode::IdleSdlCached,
         _ => {
             return Err(
-                "usage: performance MODE [REPEATS]; MODE=headless|synthesis|cached|sdl|idle-sdl|sdl-cached|idle-sdl-cached".into(),
+                "usage: performance MODE [REPEATS]; MODE=headless|synthesis|sdl|idle-sdl".into(),
             )
         }
     };
@@ -102,27 +85,18 @@ fn execute() -> Result<(), String> {
     let started = Instant::now();
     for _ in 0..repeats {
         let mut game = Adventure::default();
-        if !matches!(mode, Mode::IdleSdl | Mode::IdleSdlCached) {
+        if !matches!(mode, Mode::IdleSdl) {
             game.trace = Some(RefCell::new(Session::replay(records.clone())?));
         }
         let mut host = Host {
             remaining: frames,
             synthesis: match mode {
-                Mode::Synthesis => {
-                    Some(Box::new(Synthesizer::new(NonZeroU32::new(48_000).unwrap())))
-                }
-                Mode::Cached => Some(cached_renderer()?),
+                Mode::Synthesis => Some(Synthesizer::new(NonZeroU32::new(48_000).unwrap())),
                 _ => None,
             },
             samples: [0.0; 800],
-            sdl: if matches!(
-                mode,
-                Mode::Sdl | Mode::IdleSdl | Mode::SdlCached | Mode::IdleSdlCached
-            ) {
-                Some(create_sdl(matches!(
-                    mode,
-                    Mode::SdlCached | Mode::IdleSdlCached
-                ))?)
+            sdl: if matches!(mode, Mode::Sdl | Mode::IdleSdl) {
+                Some(SdlHardware::new(true, None)?)
             } else {
                 None
             },
@@ -131,7 +105,7 @@ fn execute() -> Result<(), String> {
         if host.remaining != 0 {
             return Err("playback interrupted".into());
         }
-        if !matches!(mode, Mode::IdleSdl | Mode::IdleSdlCached) && !won(&game) {
+        if !matches!(mode, Mode::IdleSdl) && !won(&game) {
             return Err("playthrough did not reach victory".into());
         }
         black_box(game);

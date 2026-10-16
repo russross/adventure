@@ -1,13 +1,5 @@
 use super::*;
 
-// Cached-device assertions select that output path explicitly.
-fn cached_audio(hardware: &mut SdlHardware) -> &mut AudioDevice<EffectPlayer> {
-    match &mut hardware.audio {
-        AudioOutput::Cached(device) => device,
-        AudioOutput::Synthesized(_) => panic!("expected cached audio device"),
-    }
-}
-
 #[test]
 #[ignore = "requires an SDL video and audio driver"]
 fn default_audio_streams_continuous_pcm_and_mute_controls_delivery() {
@@ -16,24 +8,18 @@ fn default_audio_streams_continuous_pcm_and_mute_controls_delivery() {
     let mut sound = Sound::default();
     sound.voice(4, 7, 15);
     hardware.present(&frame, &sound).unwrap();
-    let AudioOutput::Synthesized(audio) = &hardware.audio else {
-        panic!("default audio must preserve continuous phase");
-    };
+    let audio = &hardware.audio;
     assert_eq!(audio.device.status(), sdl2::audio::AudioStatus::Playing);
 
     // Muting clears delivery immediately; resuming retains the existing synthesis state.
     hardware.muted = true;
     hardware.present(&frame, &sound).unwrap();
-    let AudioOutput::Synthesized(audio) = &hardware.audio else {
-        unreachable!()
-    };
+    let audio = &hardware.audio;
     assert_eq!(audio.device.status(), sdl2::audio::AudioStatus::Paused);
     assert_eq!(audio.device.size(), 0);
     hardware.muted = false;
     hardware.present(&frame, &sound).unwrap();
-    let AudioOutput::Synthesized(audio) = &hardware.audio else {
-        unreachable!()
-    };
+    let audio = &hardware.audio;
     assert_eq!(audio.device.status(), sdl2::audio::AudioStatus::Playing);
 }
 
@@ -116,7 +102,7 @@ fn packed_texture_formats_preserve_every_palette_color_and_snapshot() {
 #[test]
 #[ignore = "requires an SDL video and audio driver; run with dummy drivers in headless environments"]
 fn sdl_idle_redraws_resets_uploads_and_frame_boundaries() {
-    let mut hardware = SdlHardware::with_audio_mode(false, Some(12), AudioMode::Cached).unwrap();
+    let mut hardware = SdlHardware::new(false, Some(12)).unwrap();
     let sound = Sound::default();
     let mut frame = Frame::default();
     hardware.present(&frame, &sound).unwrap();
@@ -128,11 +114,6 @@ fn sdl_idle_redraws_resets_uploads_and_frame_boundaries() {
     assert_eq!(hardware.redraws, settled);
     assert!(settled >= initial);
     assert_eq!(hardware.frames, 3);
-    assert!(cached_audio(&mut hardware).lock().idle());
-    assert_eq!(
-        cached_audio(&mut hardware).status(),
-        sdl2::audio::AudioStatus::Paused
-    );
 
     // Real SDL events force repainting even while the indexed picture is retained.
     let events = hardware._sdl.event().unwrap();
@@ -229,47 +210,4 @@ fn stella_controls_and_aliases_remain_independent() {
     assert_eq!(keyboard.sample().left_difficulty, Difficulty::B);
     assert_eq!(keyboard.sample().right_difficulty, Difficulty::B);
     assert!(keyboard.sample().color);
-}
-
-// Exercise the real callback while leaving graphics idle. Manual callback reads
-// under SDL's lock make completion deterministic without depending on wall time.
-#[test]
-#[ignore = "requires an SDL video and audio driver; run with dummy drivers in headless environments"]
-fn sdl_cached_audio_resumes_and_pauses_after_release() {
-    use crate::sound::{EffectCadence, SoundEffect};
-    use sdl2::audio::AudioStatus;
-
-    let mut hardware = SdlHardware::with_audio_mode(false, None, AudioMode::Cached).unwrap();
-    let frame = Frame::default();
-    let mut sound = Sound::default();
-    hardware.present(&frame, &sound).unwrap();
-    assert_eq!(cached_audio(&mut hardware).status(), AudioStatus::Paused);
-    sound.effect(SoundEffect::Pickup, 3, EffectCadence::EveryTurn);
-    hardware.present(&frame, &sound).unwrap();
-    assert_eq!(cached_audio(&mut hardware).status(), AudioStatus::Playing);
-    let mut output = [0.0; 800];
-    cached_audio(&mut hardware).lock().render(&mut output);
-    assert!(output.iter().any(|sample| sample.abs() > 0.001));
-
-    sound.silence();
-    hardware.present(&frame, &sound).unwrap();
-    cached_audio(&mut hardware).lock().render(&mut output);
-    assert!(output[96..].iter().all(|sample| *sample == 0.0));
-    hardware.present(&frame, &sound).unwrap();
-    assert_eq!(cached_audio(&mut hardware).status(), AudioStatus::Paused);
-
-    // Muting releases playback; unmuting seeks the latest step rather than
-    // replaying the effect from the position retained before the mute shortcut.
-    sound.effect(SoundEffect::Roar, 15, EffectCadence::EveryTurn);
-    hardware.present(&frame, &sound).unwrap();
-    cached_audio(&mut hardware).lock().render(&mut output);
-    hardware.muted = true;
-    hardware.present(&frame, &sound).unwrap();
-    cached_audio(&mut hardware).lock().render(&mut output);
-    hardware.present(&frame, &sound).unwrap();
-    assert_eq!(cached_audio(&mut hardware).status(), AudioStatus::Paused);
-    sound.effect(SoundEffect::Roar, 10, EffectCadence::EveryTurn);
-    hardware.muted = false;
-    hardware.present(&frame, &sound).unwrap();
-    assert_eq!(cached_audio(&mut hardware).status(), AudioStatus::Playing);
 }

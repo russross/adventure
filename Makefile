@@ -12,7 +12,7 @@ DASM ?= $(abspath rom/tools/dasm)
 MANIFESTS := Cargo.toml src/rawemulator/Cargo.toml src/trace/Cargo.toml
 .PHONY: all release adventure run format fmt lint check test smoke validate
 .PHONY: rom gameplay analysis verify rom-check mostlyclean clean flamegraph python-reference
-.PHONY: performance-build performance audio-performance performance-check
+.PHONY: performance-build performance performance-check
 
 Cargo.lock: $(MANIFESTS)
 	$(CARGO) generate-lockfile
@@ -68,9 +68,6 @@ performance-check:
 
 performance: performance-build
 	$(PYTHON) tests/performance.py
-
-audio-performance: performance-build
-	$(PYTHON) tests/performance.py --audio-comparison
 
 # Keep deployed executables and user captures while discarding compiler intermediates.
 mostlyclean:

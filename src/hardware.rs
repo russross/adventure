@@ -1,12 +1,10 @@
 //! SDL picture/audio presentation and controls. Frame pacing occurs only at vertical sync.
 
 use std::collections::HashSet;
-use std::num::NonZeroU32;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sdl2::audio::{AudioCallback, AudioDevice, AudioSpecDesired};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::keyboard::{Keycode, Mod};
 use sdl2::pixels::{Color, PixelFormat, PixelFormatEnum};
@@ -16,7 +14,7 @@ use sdl2::surface::Surface;
 use sdl2::video::Window;
 
 use crate::input::{Controls, Difficulty, Direction, Joystick};
-use crate::sound::{AudioMode, EffectPlayer, Sound};
+use crate::sound::Sound;
 use crate::streaming_audio::StreamingAudio;
 use crate::video::{Frame, HEIGHT, WIDTH};
 
@@ -104,20 +102,12 @@ pub struct SdlHardware {
     refresh: DisplayRefresh,
     #[cfg(test)]
     redraws: usize,
-    audio: AudioOutput,
+    audio: StreamingAudio,
     muted: bool,
 }
 
 impl SdlHardware {
     pub fn new(paced: bool, frame_limit: Option<usize>) -> Result<Self, String> {
-        Self::with_audio_mode(paced, frame_limit, AudioMode::default())
-    }
-
-    pub fn with_audio_mode(
-        paced: bool,
-        frame_limit: Option<usize>,
-        mode: AudioMode,
-    ) -> Result<Self, String> {
         let sdl = sdl2::init()?;
         let video = sdl.video()?;
         let window = video
@@ -140,30 +130,7 @@ impl SdlHardware {
         let pixels = TexturePixels::new(&canvas.info().texture_formats)?;
         let texture = pixels.create_texture(&mut canvas)?;
         let events = sdl.event_pump()?;
-        // Only the selected output path allocates its device and synthesis state.
-        let audio_subsystem = sdl.audio()?;
-        let audio = match mode {
-            AudioMode::Synthesized => {
-                AudioOutput::Synthesized(StreamingAudio::new(&audio_subsystem)?)
-            }
-            AudioMode::Cached => AudioOutput::Cached(
-                audio_subsystem
-                    .open_playback(
-                        None,
-                        &AudioSpecDesired {
-                            freq: Some(48_000),
-                            channels: Some(1),
-                            samples: Some(512),
-                        },
-                        |spec| {
-                            let rate = NonZeroU32::new(spec.freq as u32)
-                                .expect("SDL supplies a positive audio sample rate");
-                            EffectPlayer::new(rate)
-                        },
-                    )
-                    .map_err(|error| format!("cannot open audio output: {error}"))?,
-            ),
-        };
+        let audio = StreamingAudio::new(&sdl.audio()?)?;
         Ok(Self {
             _sdl: sdl,
             canvas,
@@ -317,41 +284,6 @@ impl FrameHost for SdlHardware {
             }
         }
         Ok(Some(controls))
-    }
-}
-
-// Continuous output follows the picture clock; cached output follows callback time.
-enum AudioOutput {
-    Synthesized(StreamingAudio),
-    Cached(AudioDevice<EffectPlayer>),
-}
-
-impl AudioOutput {
-    fn present(&mut self, sound: &Sound, muted: bool) -> Result<(), String> {
-        match self {
-            Self::Synthesized(audio) => audio.present(sound, muted),
-            Self::Cached(device) => {
-                let idle = {
-                    let mut player = device.lock();
-                    player.update(sound, muted);
-                    player.idle()
-                };
-                if idle {
-                    device.pause();
-                } else {
-                    device.resume();
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-impl AudioCallback for EffectPlayer {
-    type Channel = f32;
-
-    fn callback(&mut self, output: &mut [f32]) {
-        self.render(output);
     }
 }
 

@@ -31,7 +31,7 @@ Add `--headless` for silent, full speed execution without SDL, or `--display` fo
 
 Every trace workflow runs the main game and an independent original-instruction emulator together. At each frame boundary the raw emulator catches up before the single pacing sleep. Input playback runs only the main game. `--record` can accompany `--trace` or `--validate`, using separate output paths. Recording replaces its output file and finishes on normal quit.
 
-`--frames N` bounds live play; it is required for headless live runs. `--unpaced` removes display pacing. `--snapshot FILE.bmp` saves the final displayed picture. `--audio synthesized|cached` selects the displayed audio path; continuous synthesis is the default. `adventure --help` lists options and controls.
+`--frames N` bounds live play; it is required for headless live runs. `--unpaced` removes display pacing. `--snapshot FILE.bmp` saves the final displayed picture. Displayed audio uses continuous synthesis. `adventure --help` lists options and controls.
 
 
 Controls

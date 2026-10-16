@@ -11,7 +11,7 @@ use adventure::hardware::{FrameHost, SdlHardware};
 use adventure::input::Controls;
 use adventure::recording::Recording;
 use adventure::replay::{PlaybackHost, ReplayHost};
-use adventure::sound::{AudioMode, Sound};
+use adventure::sound::Sound;
 use adventure::validation::Validation;
 use adventure::video::Frame;
 use adventure_trace::{Record, Session};
@@ -27,7 +27,6 @@ enum Mode {
 #[derive(Default)]
 struct Options {
     mode: Mode,
-    audio: AudioMode,
     frames: Option<NonZeroUsize>,
     headless: Option<bool>,
     unpaced: bool,
@@ -73,12 +72,6 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Options>, String> 
     let mut args = args;
     while let Some(argument) = args.next() {
         match argument.as_str() {
-            "--audio" => {
-                options.audio = args
-                    .next()
-                    .ok_or("--audio needs synthesized or cached")?
-                    .parse()?;
-            }
             "--frames" => {
                 options.frames = Some(
                     args.next()
@@ -135,8 +128,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Options>, String> 
                     --display       Run with display, sound, and 60 Hz pacing\n\
                     --unpaced       Disable display pacing\n\
                     --frames N      Stop live play after N pictures\n\
-                    --snapshot FILE Save the final displayed picture as BMP\n\
-                    --audio synthesized|cached  Select display audio (default: synthesized)"
+                    --snapshot FILE Save the final displayed picture as BMP"
                 );
                 print_controls();
                 return Ok(None);
@@ -237,10 +229,9 @@ fn execute() -> Result<(), String> {
         })))
     } else {
         print_controls();
-        Host::Display(Box::new(SdlHardware::with_audio_mode(
+        Host::Display(Box::new(SdlHardware::new(
             !options.unpaced,
             options.frames.map(NonZeroUsize::get),
-            options.audio,
         )?))
     };
     if let Some(frames) = playback_frames {

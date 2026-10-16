@@ -136,11 +136,8 @@ def measure(
 def main() -> None:
     if sys.platform != "darwin":
         raise RuntimeError("service measurements require macOS")
-    if sys.argv[1:] == ["--audio-comparison"]:
-        compare_audio()
-        return
     if sys.argv[1:]:
-        raise RuntimeError("usage: performance.py [--audio-comparison]")
+        raise RuntimeError("usage: performance.py")
     if OUTPUT.exists():
         raise RuntimeError(f"move or remove previous results before running: {OUTPUT}")
     metadata()
@@ -157,35 +154,12 @@ def main() -> None:
             for port in PORTS:
                 measure(port, mode, 10, trial)
 
-    # Paced workloads exercise the real device callback over the entire trace duration.
+    # Paced workloads exercise the real audio device over the entire trace duration.
     measure("system", "baseline", 0, 1)
     for port in PORTS:
         for mode in ("idle-sdl", "sdl"):
             measure(port, mode, 1, 1)
     measure("system", "baseline", 0, 2)
-
-
-def compare_audio() -> None:
-    output = ROOT / "target/audio-performance.jsonl"
-    if output.exists():
-        raise RuntimeError(f"move or remove previous results before running: {output}")
-    metadata(output)
-    subprocess.run(
-        [str(ROOT / "target/release/examples/adventure_performance"), "headless"],
-        check=True,
-    )
-    for trial in range(1, 6):
-        for mode in ("headless", "synthesis", "cached"):
-            measure("adventure", mode, 10, trial, output)
-
-    # Reverse paired trial order to limit a persistent ordering bias between modes.
-    measure("system", "baseline", 0, 1, output)
-    for trial, modes in enumerate((("sdl", "sdl-cached"), ("sdl-cached", "sdl")), 1):
-        for mode in modes:
-            measure("adventure", mode, 1, trial, output)
-    for mode in ("idle-sdl", "idle-sdl-cached"):
-        measure("adventure", mode, 1, 1, output)
-    measure("system", "baseline", 0, 2, output)
 
 
 if __name__ == "__main__":
