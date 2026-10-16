@@ -27,15 +27,15 @@ fn direction(value: Direction) -> u8 {
 }
 impl Adventure {
     pub(super) fn trace_initialize(&self) {
-        if let Some(trace) = &self.trace {
+        if let Some(trace) = self.session.trace() {
             trace.borrow_mut().initialize(game(self.world.game));
         }
     }
     // Attachment is observed as a transition only when the bat crossed a room boundary this operation.
     pub(super) fn trace_cargo_attachment(&self, cargo: RecordId) {
         if self
-            .trace
-            .as_ref()
+            .session
+            .trace()
             .is_some_and(|trace| trace.borrow().crossed(Object::Bat))
         {
             self.trace_transition(cargo);
@@ -59,28 +59,28 @@ impl Adventure {
         }
     }
     pub(super) fn trace_at(&self, point: Point) {
-        if let Some(trace) = &self.trace {
+        if let Some(trace) = self.session.trace() {
             trace.borrow_mut().at(point);
         }
     }
     pub(super) fn trace_observe(&self, observation: Observation) {
-        if let Some(trace) = &self.trace {
+        if let Some(trace) = self.session.trace() {
             trace.borrow_mut().observe(observation);
         }
     }
     // Ordinary play returns live input unchanged. Playback supplies input without changing world state.
     pub(super) fn input_value(&self, control: Control, live: u8) -> u8 {
-        let live = self.recording.as_ref().map_or(live, |recording| {
+        let live = self.session.recording.as_ref().map_or(live, |recording| {
             recording.borrow_mut().input(control, live)
         });
-        self.trace
-            .as_ref()
+        self.session
+            .trace()
             .map_or(live, |trace| trace.borrow_mut().input(control, live))
     }
 
     // Each checkpoint observes complete records, including those outside the displayed room.
     pub(super) fn trace_checkpoint(&self) {
-        if self.trace.is_none() {
+        if self.session.trace().is_none() {
             return;
         }
         let r = &self.world;

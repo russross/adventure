@@ -12,7 +12,6 @@ use adventure::input::Controls;
 use adventure::recording::Recording;
 use adventure::replay::{PlaybackHost, ReplayHost};
 use adventure::sound::Sound;
-use adventure::validation::Validation;
 use adventure::video::Frame;
 use adventure_trace::{Record, Session};
 
@@ -189,13 +188,13 @@ fn execute() -> Result<(), String> {
                 File::open(path).map_err(|error| format!("{}: {error}", path.display()))?,
             ))?;
             let frames = recording.frames();
-            game.recording = Some(RefCell::new(recording));
+            game.session.recording = Some(RefCell::new(recording));
             Some(frames)
         }
         Mode::Verify(path) => {
             let records = load_trace(path)?;
             let frames = records.last().ok_or("empty trace")?.at.frame;
-            game.trace = Some(RefCell::new(Session::replay(records)?));
+            game.session.set_trace(Session::replay(records)?);
             Some(frames)
         }
         Mode::Play => None,
@@ -203,7 +202,7 @@ fn execute() -> Result<(), String> {
 
     // Every trace workflow gets independent cartridge execution; input replay does not.
     if options.trace.is_some() || options.validate || matches!(options.mode, Mode::Verify(_)) {
-        if game.trace.is_none() {
+        if game.session.trace().is_none() {
             let writer: Box<dyn Write> = if let Some(path) = &options.trace {
                 Box::new(BufWriter::new(
                     File::create(path).map_err(|error| format!("{}: {error}", path.display()))?,
@@ -211,14 +210,12 @@ fn execute() -> Result<(), String> {
             } else {
                 Box::new(sink())
             };
-            game.trace = Some(RefCell::new(Session::record_to(writer)?));
+            game.session.set_trace(Session::record_to(writer)?);
         }
-        game.validation = Some(Validation::attach(
-            &mut game.trace.as_ref().expect("validation trace").borrow_mut(),
-        )?);
+        game.session.enable_validation()?;
     }
     if let Some(path) = &options.record {
-        game.recording = Some(RefCell::new(Recording::record_to(BufWriter::new(
+        game.session.recording = Some(RefCell::new(Recording::record_to(BufWriter::new(
             File::create(path).map_err(|error| format!("{}: {error}", path.display()))?,
         ))?));
     }

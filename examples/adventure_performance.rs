@@ -1,14 +1,13 @@
 //! Repeatable complete-trace and idle host performance workloads.
 use adventure as port;
-use port::validation::Validation;
 use port::video::Frame;
 
 include!("../tests/performance.rs");
 
 // Adapt the public game entry and host boundary to the shared workload.
 fn run_game(game: &mut Adventure, host: &mut Host) -> Result<(), String> {
-    if let Some(trace) = &game.trace {
-        game.validation = Some(Validation::attach(&mut trace.borrow_mut())?);
+    if game.session.trace().is_some() {
+        game.session.enable_validation()?;
     }
     game.run(host)
 }

@@ -4,8 +4,8 @@ use std::io::{self, BufWriter, Write};
 use std::process::ExitCode;
 
 use adventure::adventure::{Adventure, GateState, Position};
-use adventure::hardware::FrameHost;
 use adventure::input::{Controls, Difficulty, Direction, Joystick};
+use adventure::runtime::FrameHost;
 use adventure::sound::Sound;
 use adventure::video::Frame;
 

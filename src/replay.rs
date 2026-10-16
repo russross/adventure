@@ -1,7 +1,7 @@
 //! Replay hosts; input sessions supply controls at logical gameplay reads.
 
-use crate::hardware::FrameHost;
 use crate::input::Controls;
+use crate::runtime::FrameHost;
 use crate::sound::Sound;
 use crate::video::Frame;
 

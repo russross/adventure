@@ -1,5 +1,4 @@
 // Complete-trace workloads share the same input and stopping boundary.
-use std::cell::RefCell;
 use std::env;
 use std::hint::black_box;
 use std::num::NonZeroU32;
@@ -86,7 +85,7 @@ fn execute() -> Result<(), String> {
     for _ in 0..repeats {
         let mut game = Adventure::default();
         if !matches!(mode, Mode::IdleSdl) {
-            game.trace = Some(RefCell::new(Session::replay(records.clone())?));
+            game.session.set_trace(Session::replay(records.clone())?);
         }
         let mut host = Host {
             remaining: frames,

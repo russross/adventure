@@ -22,23 +22,7 @@ use crate::video::{Frame, HEIGHT, WIDTH};
 const WINDOW_WIDTH: u32 = WIDTH as u32 * 2;
 const WINDOW_HEIGHT: u32 = HEIGHT as u32;
 
-pub trait FrameHost {
-    /// Sample controls without presenting, generating audio, or advancing the frame limit.
-    fn sample_controls(&mut self) -> Result<Option<Controls>, String>;
-
-    /// Process input and present picture and sound; None means the host is stopping.
-    fn present(&mut self, frame: &Frame, sound: &Sound) -> Result<Option<Controls>, String>;
-}
-
-impl<H: FrameHost> FrameHost for &mut H {
-    fn sample_controls(&mut self) -> Result<Option<Controls>, String> {
-        (**self).sample_controls()
-    }
-
-    fn present(&mut self, frame: &Frame, sound: &Sound) -> Result<Option<Controls>, String> {
-        (**self).present(frame, sound)
-    }
-}
+pub use crate::runtime::FrameHost;
 
 #[derive(Default)]
 struct KeyboardConsole {

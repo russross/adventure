@@ -4,10 +4,10 @@ use std::io::Write;
 use std::rc::Rc;
 
 use adventure::adventure::Adventure;
-use adventure::hardware::FrameHost;
 use adventure::input::Controls;
 use adventure::recording::Recording;
 use adventure::replay::PlaybackHost;
+use adventure::runtime::FrameHost;
 use adventure::sound::{Channel, Sound};
 use adventure::video::Frame;
 use adventure_trace::Control;
@@ -69,13 +69,14 @@ fn compact_recording_preserves_presentations_and_replays_without_live_input() {
             pictures: Vec::new(),
         };
         let mut recording = Adventure::default();
-        recording.recording = Some(RefCell::new(Recording::record_to(bytes.clone()).unwrap()));
+        recording.session.recording =
+            Some(RefCell::new(Recording::record_to(bytes.clone()).unwrap()));
         recording.run(&mut captured).unwrap();
         assert_eq!(captured.pictures, expected.pictures);
         let session = Recording::replay(Cursor::new(bytes.0.borrow().clone())).unwrap();
         assert_eq!(session.frames(), limit as u64);
         let mut replay = Adventure::default();
-        replay.recording = Some(RefCell::new(session));
+        replay.session.recording = Some(RefCell::new(session));
         let mut actual = Host {
             limit: usize::MAX,
             pictures: Vec::new(),

@@ -1,9 +1,7 @@
-use std::cell::RefCell;
-
 use adventure::adventure::Adventure;
-use adventure::hardware::FrameHost;
 use adventure::input::Controls;
 use adventure::replay::{PlaybackHost, ReplayHost};
+use adventure::runtime::FrameHost;
 use adventure::sound::{Channel, Sound};
 use adventure::video::Frame;
 use adventure_trace::Session;
@@ -16,7 +14,7 @@ fn recorded_easy_playthrough_reaches_victory() {
     let records = fixture::easy_playthrough();
     let frames = records.last().unwrap().at.frame;
     let mut game = Adventure::default();
-    game.trace = Some(RefCell::new(Session::replay(records).unwrap()));
+    game.session.set_trace(Session::replay(records).unwrap());
     fixture::attach_validation(&mut game);
     game.run(&mut ReplayHost::new(frames)).unwrap();
     assert!(game.world.won);
@@ -29,7 +27,7 @@ fn traces_validate_both_implementations_in_all_games() {
         for frames in [1, 2, 3, 17, 401] {
             let (_, records) = fixture::record(number, frames, 2);
             let mut game = Adventure::default();
-            game.trace = Some(RefCell::new(Session::replay(records).unwrap()));
+            game.session.set_trace(Session::replay(records).unwrap());
             fixture::attach_validation(&mut game);
             game.run(&mut ReplayHost::new(frames)).unwrap();
         }
@@ -40,7 +38,7 @@ fn traces_validate_both_implementations_in_all_games() {
 fn key_and_gate_trace_validates_both_implementations() {
     let (_, records) = fixture::record_castle();
     let mut game = Adventure::default();
-    game.trace = Some(RefCell::new(Session::replay(records).unwrap()));
+    game.session.set_trace(Session::replay(records).unwrap());
     fixture::attach_validation(&mut game);
     game.run(&mut ReplayHost::new(270)).unwrap();
 }
@@ -50,9 +48,8 @@ fn canceled_boot_trace_validates_both_implementations() {
     let mut recording = Session::record();
     recording.finish().unwrap();
     let mut game = Adventure::default();
-    game.trace = Some(RefCell::new(
-        Session::replay(recording.records().to_vec()).unwrap(),
-    ));
+    game.session
+        .set_trace(Session::replay(recording.records().to_vec()).unwrap());
     fixture::attach_validation(&mut game);
     game.run(&mut ReplayHost::new(0)).unwrap();
 }
@@ -85,7 +82,9 @@ fn playback_presents_entire_run_and_ignores_live_gameplay_controls() {
             let (_, records) = fixture::record(number, frames, 2);
             let mut expected = Vec::new();
             let mut reference = Adventure::default();
-            reference.trace = Some(RefCell::new(Session::replay(records.clone()).unwrap()));
+            reference
+                .session
+                .set_trace(Session::replay(records.clone()).unwrap());
             reference
                 .run(&mut CaptureHost {
                     pictures: &mut expected,
@@ -113,7 +112,7 @@ fn playback_presents_entire_run_and_ignores_live_gameplay_controls() {
                 frames,
             );
             let mut game = Adventure::default();
-            game.trace = Some(RefCell::new(Session::replay(records).unwrap()));
+            game.session.set_trace(Session::replay(records).unwrap());
             game.run(&mut host).unwrap();
             assert!(!host.interrupted());
             assert_eq!(actual.len(), frames as usize);
@@ -135,7 +134,7 @@ fn playback_distinguishes_early_quit_from_recorded_end() {
         17,
     );
     let mut game = Adventure::default();
-    game.trace = Some(RefCell::new(Session::replay(records).unwrap()));
+    game.session.set_trace(Session::replay(records).unwrap());
     assert!(game.run(&mut host).is_err());
     assert!(host.interrupted());
     assert_eq!(pictures.len(), 2);

@@ -4,6 +4,7 @@
 .DELETE_ON_ERROR:
 CARGO ?= cargo
 TEST_PACKAGES ?= --workspace
+CARGO_FEATURES ?=
 RUSTFMT ?= rustfmt
 UV ?= uv
 ROM_MAKE ?= $(shell command -v gmake 2>/dev/null || command -v make)
@@ -33,14 +34,14 @@ fmt:
 	$(RUSTFMT) --check tests/performance.rs tests/trace_fixture.rs
 
 lint: fmt Cargo.lock
-	$(CARGO) clippy --locked --workspace --all-targets -- -D warnings
+	$(CARGO) clippy --locked --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
 
 check: lint performance-check
 	$(ROM_MAKE) -C rom check DASM="$(DASM)" PYTHON="$(PYTHON)" UV="$(UV)"
 	$(MAKE) test TEST_ARGS="$(TEST_ARGS)"
 
 test: Cargo.lock
-	$(CARGO) test --locked $(TEST_PACKAGES) $(TEST_ARGS)
+	$(CARGO) test --locked $(TEST_PACKAGES) $(CARGO_FEATURES) $(TEST_ARGS)
 
 smoke: Cargo.lock
 	$(CARGO) run --locked -p adventure --example sdl_smoke -- $(ARGS)

@@ -1,17 +1,14 @@
 //! World simulation, picture scheduling, rendering, and immutable game data.
 
-use crate::hardware::FrameHost;
 use crate::input::{Controls, Difficulty, Direction};
-use crate::recording::Recording;
+use crate::runtime::{FrameHost, Runtime};
 use crate::sound::{Sound, SoundEffect};
-use crate::validation::Validation;
 use crate::video::{
     Appearance, Contacts, Geometry, HEIGHT, Object, ObjectLine, Picture, PlayfieldRow, SpriteWidth,
     Video, WIDTH,
 };
 use Exit::{ByGame, Fixed};
-use adventure_trace::{Point, Session};
-use std::cell::RefCell;
+use adventure_trace::Point;
 
 #[path = "controls.rs"]
 mod controls;
@@ -668,9 +665,7 @@ pub struct Adventure {
     pub video: Video,
     pub sound: Sound,
     pub controls: Controls,
-    pub trace: Option<RefCell<Session>>,
-    pub recording: Option<RefCell<Recording>>,
-    pub validation: Option<Validation>,
+    pub session: Runtime,
     display: PreparedDisplay,
     contacts: Contacts,
     scheduler: Scheduler,
@@ -695,44 +690,17 @@ impl Adventure {
     // The entry keeps startup and the repeated game-turn sequence separate.
     pub fn run(&mut self, host: &mut impl FrameHost) -> Result<(), String> {
         if !self.power_on(host)? {
-            if let Some(recording) = &self.recording {
-                recording.borrow_mut().finish()?;
-            }
-            if let Some(trace) = &self.trace {
-                trace.borrow_mut().finish()?;
-            }
-            self.finish_validation()?;
-            return Ok(());
+            return self.session.finish();
         }
         while self.advance_picture(host)? {
-            if let Some(recording) = &self.recording {
+            if let Some(recording) = &self.session.recording {
                 recording.borrow().check()?;
             }
-            if let Some(trace) = &self.trace {
+            if let Some(trace) = self.session.trace() {
                 trace.borrow().check()?;
             }
         }
-        if let Some(recording) = &self.recording {
-            recording.borrow_mut().finish()?;
-        }
-        if let Some(trace) = &self.trace {
-            trace.borrow_mut().finish()?;
-        }
-        self.finish_validation()?;
-        Ok(())
-    }
-
-    fn finish_validation(&mut self) -> Result<(), String> {
-        if let Some(validation) = &mut self.validation {
-            validation.finish(
-                self.trace
-                    .as_ref()
-                    .expect("validation trace")
-                    .borrow()
-                    .frame,
-            )?;
-        }
-        Ok(())
+        self.session.finish()
     }
 
     // Clear state once, place the fixed barriers, and initialize the selected world.
@@ -745,6 +713,7 @@ impl Adventure {
         self.scheduler.player_visible = false;
         self.sound = Sound::default();
         if self
+            .session
             .recording
             .as_ref()
             .is_some_and(|recording| recording.borrow().stopped_at_boot())
@@ -752,8 +721,8 @@ impl Adventure {
             return Ok(false);
         }
         if self
-            .trace
-            .as_ref()
+            .session
+            .trace()
             .is_some_and(|trace| trace.borrow().stopped_at_boot())
         {
             return Ok(false);
@@ -861,22 +830,14 @@ impl Adventure {
 
     // Present the accumulated frame and sample controls at the vertical boundary.
     fn present_picture(&mut self, host: &mut impl FrameHost) -> Result<bool, String> {
-        if let Some(validation) = &mut self.validation {
-            validation.catch_up(
-                self.trace
-                    .as_ref()
-                    .expect("validation trace")
-                    .borrow()
-                    .frame,
-            )?;
-        }
+        self.session.catch_up()?;
         match host.present(&self.video.frame, &self.sound)? {
             Some(controls) => {
                 self.controls = controls;
-                if let Some(recording) = &self.recording {
+                if let Some(recording) = &self.session.recording {
                     recording.borrow_mut().next_frame();
                 }
-                if let Some(trace) = &self.trace {
+                if let Some(trace) = self.session.trace() {
                     trace.borrow_mut().next_frame();
                 }
                 Ok(true)

@@ -8,16 +8,27 @@ autotests = false
 [[bin]]
 name = "adventure"
 path = "src/main.rs"
+required-features = ["sdl", "validation"]
 
 [[example]]
 name = "sdl_smoke"
 path = "src/tests/sdl_smoke.rs"
+required-features = ["sdl", "validation"]
+
+[[example]]
+name = "adventure_performance"
+required-features = ["sdl", "validation"]
+
+[features]
+default = ["sdl", "validation"]
+sdl = ["dep:sdl2"]
+validation = ["dep:rawemulator"]
 
 [dependencies]
 adventure-trace.workspace = true
-sdl2 = { workspace = true, features = ["unsafe_textures"] }
+sdl2 = { workspace = true, features = ["unsafe_textures"], optional = true }
 
-rawemulator = { path = "src/rawemulator" }
+rawemulator = { path = "src/rawemulator", optional = true }
 
 [workspace]
 members = [".", "src/rawemulator", "src/trace"]
@@ -30,6 +41,7 @@ sdl2 = { version = "0.38", features = ["use-pkgconfig"] }
 [[test]]
 name = "cli"
 path = "tests/cli.rs"
+required-features = ["sdl", "validation"]
 
 [[test]]
 name = "recording"
@@ -38,3 +50,4 @@ path = "tests/recording.rs"
 [[test]]
 name = "trace"
 path = "tests/trace.rs"
+required-features = ["validation"]

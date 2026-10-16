@@ -63,4 +63,6 @@ Development
 
 `make check` also verifies ROM reconstruction; it requires GNU Make 4.3+, a C compiler, curl, tar, sha256sum, Python, and uv. ROM builds select `gmake` when installed; `ROM_MAKE` and `DASM` provide overrides. Cargo uses one workspace lockfile and shared `target/` directory. `make mostlyclean` preserves the release executable; `make clean` removes build assets too.
 
+The game library can run without SDL or the cartridge emulator by disabling the default `sdl` and `validation` Cargo features. Hosts implement `runtime::FrameHost`; optional recording and validation belong to `Adventure::session`. Check this portable configuration with `make lint CARGO_FEATURES=--no-default-features` and `make test TEST_PACKAGES='-p adventure' CARGO_FEATURES=--no-default-features`.
+
 [NOTES.md](NOTES.md) contains the consolidated gameplay, rendering, audio, recording, validation, Python, and ROM workflows. [tests/README.md](tests/README.md) describes retained fixtures and performance tools.

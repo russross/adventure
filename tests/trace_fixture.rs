@@ -1,17 +1,13 @@
-use std::cell::RefCell;
-
 use adventure::adventure::Adventure;
-use adventure::hardware::FrameHost;
 use adventure::input::{Controls, Difficulty, Direction};
 use adventure::replay::ReplayHost;
+use adventure::runtime::FrameHost;
 use adventure::sound::Sound;
-use adventure::validation::Validation;
 use adventure::video::Frame;
 use adventure_trace::{Record, Session};
 
 pub fn attach_validation(game: &mut Adventure) {
-    game.validation =
-        Some(Validation::attach(&mut game.trace.as_ref().unwrap().borrow_mut()).unwrap());
+    game.session.enable_validation().unwrap();
 }
 
 // Keep the recorded complete playthrough independent of generated test inputs.
@@ -104,7 +100,7 @@ impl FrameHost for ScriptedHost {
 }
 pub fn record(game: u8, frames: u64, seed: u64) -> (Adventure, Vec<Record>) {
     let mut game_state = Adventure::default();
-    game_state.trace = Some(RefCell::new(Session::record()));
+    game_state.session.set_trace(Session::record());
     attach_validation(&mut game_state);
     game_state
         .run(&mut ScriptedHost {
@@ -115,7 +111,8 @@ pub fn record(game: u8, frames: u64, seed: u64) -> (Adventure, Vec<Record>) {
         })
         .unwrap();
     let records = game_state
-        .trace
+        .session
+        .trace()
         .as_ref()
         .unwrap()
         .borrow()
@@ -128,7 +125,7 @@ pub fn record(game: u8, frames: u64, seed: u64) -> (Adventure, Vec<Record>) {
 pub fn replay(records: Vec<Record>) -> Result<Adventure, String> {
     let frames = records.last().unwrap().at.frame;
     let mut game = Adventure::default();
-    game.trace = Some(RefCell::new(Session::replay(records)?));
+    game.session.set_trace(Session::replay(records)?);
     attach_validation(&mut game);
     game.run(&mut ReplayHost::new(frames))?;
     Ok(game)
@@ -163,9 +160,16 @@ pub fn record_castle() -> (Adventure, Vec<Record>) {
         }
     }
     let mut game = Adventure::default();
-    game.trace = Some(RefCell::new(Session::record()));
+    game.session.set_trace(Session::record());
     attach_validation(&mut game);
     game.run(&mut Host(0)).unwrap();
-    let records = game.trace.as_ref().unwrap().borrow().records().to_vec();
+    let records = game
+        .session
+        .trace()
+        .as_ref()
+        .unwrap()
+        .borrow()
+        .records()
+        .to_vec();
     (game, records)
 }

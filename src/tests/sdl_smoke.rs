@@ -1,6 +1,5 @@
 //! Drive real SDL events through a short play session, then save the presented picture.
 
-use std::cell::RefCell;
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::process;
@@ -10,7 +9,6 @@ use adventure::hardware::{FrameHost, SdlHardware};
 use adventure::input::Controls;
 use adventure::replay::PlaybackHost;
 use adventure::sound::{Sound, Synthesizer};
-use adventure::validation::Validation;
 use adventure::video::Frame;
 use adventure_trace::Session as TraceSession;
 use sdl2::event::Event;
@@ -102,10 +100,8 @@ fn execute() -> Result<(), String> {
         audible_samples: 0,
     };
     let mut game = Adventure::default();
-    game.trace = Some(RefCell::new(TraceSession::record()));
-    game.validation = Some(Validation::attach(
-        &mut game.trace.as_ref().unwrap().borrow_mut(),
-    )?);
+    game.session.set_trace(TraceSession::record());
+    game.session.enable_validation()?;
     game.run(&mut session)?;
     session
         .display
@@ -123,13 +119,11 @@ fn execute() -> Result<(), String> {
     }
 
     // Play the real event recording through SDL and verify the same final picture.
-    let records = game.trace.as_ref().unwrap().borrow().records().to_vec();
+    let records = game.session.trace().unwrap().borrow().records().to_vec();
     drop(session);
     let mut replay = Adventure::default();
-    replay.trace = Some(RefCell::new(TraceSession::replay(records)?));
-    replay.validation = Some(Validation::attach(
-        &mut replay.trace.as_ref().unwrap().borrow_mut(),
-    )?);
+    replay.session.set_trace(TraceSession::replay(records)?);
+    replay.session.enable_validation()?;
     let display = SdlHardware::new(true, None)?;
     if display.window_size() != (960, 582) {
         return Err("default replay window size is not 3x".into());

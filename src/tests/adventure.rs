@@ -3,12 +3,11 @@ use super::{
     HeldObject, MovementPhase, OBJECT_IDS, ObjectDisplay, ObjectId, Position, ROOM_IDS, RecordId,
     Room, SoundEffect, wall_rows,
 };
-use crate::hardware::FrameHost;
 use crate::input::{Controls, Difficulty, Direction};
+use crate::runtime::FrameHost;
 use crate::sound::Sound;
 use crate::video::{Contacts, Frame, HEIGHT};
 use adventure_trace::Session;
-use std::cell::RefCell;
 
 #[path = "rom_oracle.rs"]
 mod oracle;
@@ -1065,10 +1064,8 @@ fn recording_is_observational_for_pictures_audio_contacts_and_world_state() {
     }
 
     let mut plain = Adventure::default();
-    let mut recorded = Adventure {
-        trace: Some(RefCell::new(Session::record())),
-        ..Adventure::default()
-    };
+    let mut recorded = Adventure::default();
+    recorded.session.set_trace(Session::record());
     let mut plain_host = BoundedHost(TraceHost::default());
     let mut recorded_host = BoundedHost(TraceHost::default());
     plain.run(&mut plain_host).unwrap();
@@ -1081,6 +1078,7 @@ fn recording_is_observational_for_pictures_audio_contacts_and_world_state() {
 }
 
 #[test]
+#[cfg(feature = "validation")]
 fn long_live_sessions_validate_against_original_cartridge() {
     struct Bounded(TraceHost);
     impl FrameHost for Bounded {
@@ -1095,13 +1093,10 @@ fn long_live_sessions_validate_against_original_cartridge() {
         }
     }
     for seed in [0, 91, 255] {
-        let mut session = Session::record_to(std::io::sink()).unwrap();
-        let validation = crate::validation::Validation::attach(&mut session).unwrap();
-        let mut game = Adventure {
-            trace: Some(RefCell::new(session)),
-            validation: Some(validation),
-            ..Adventure::default()
-        };
+        let mut game = Adventure::default();
+        game.session
+            .set_trace(Session::record_to(std::io::sink()).unwrap());
+        game.session.enable_validation().unwrap();
         game.run(&mut Bounded(TraceHost {
             seed,
             ..TraceHost::default()
