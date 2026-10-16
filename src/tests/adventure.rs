@@ -117,9 +117,9 @@ fn reference(game: &Adventure) -> Cpu {
         RECORDS.iter().find(|(_, r)| *r == record).unwrap().0 as u8
     });
     cpu.memory[0xd1] = game.world.bat.flight_timer;
-    cpu.memory[0x95] = descriptor(game.world.visible[0]);
-    cpu.memory[0x96] = descriptor(game.world.visible[1]);
-    cpu.memory[0x9c] = game.world.last_candidate as u8 * 9;
+    cpu.memory[0x95] = descriptor(game.display.visible[0]);
+    cpu.memory[0x96] = descriptor(game.display.visible[1]);
+    cpu.memory[0x9c] = game.display.last_candidate as u8 * 9;
     cpu.memory[0x9d] = descriptor(game.world.carrying.item.object());
     cpu.memory[0x9e] = game.world.carrying.offset.x;
     cpu.memory[0x9f] = game.world.carrying.offset.y;
@@ -149,12 +149,12 @@ fn reference(game: &Adventure) -> Cpu {
         | u8::from(game.controls.left_difficulty == Difficulty::A) << 6
         | u8::from(game.controls.right_difficulty == Difficulty::A) << 7;
     cpu.memory[0x3c] = if game.controls.left.fire { 0 } else { 128 };
-    cpu.memory[0x32] = u8::from(game.video.contacts.player_objects[0]) << 6;
-    cpu.memory[0x33] = u8::from(game.video.contacts.player_objects[1]) << 6;
-    cpu.memory[0x34] = u8::from(game.video.contacts.player_barriers[0]) << 6;
-    cpu.memory[0x35] = u8::from(game.video.contacts.player_barriers[1]) << 6;
-    cpu.memory[0x36] = u8::from(game.video.contacts.player_walls) << 7;
-    cpu.memory[0x37] = u8::from(game.video.contacts.objects_touch) << 7;
+    cpu.memory[0x32] = u8::from(game.contacts.player_objects[0]) << 6;
+    cpu.memory[0x33] = u8::from(game.contacts.player_objects[1]) << 6;
+    cpu.memory[0x34] = u8::from(game.contacts.player_barriers[0]) << 6;
+    cpu.memory[0x35] = u8::from(game.contacts.player_barriers[1]) << 6;
+    cpu.memory[0x36] = u8::from(game.contacts.player_walls) << 7;
+    cpu.memory[0x37] = u8::from(game.contacts.objects_touch) << 7;
     cpu
 }
 
@@ -270,7 +270,7 @@ fn bridge_rollback_pickup_and_carried_offsets_match_rom() {
                 port.world.player = Position::new(Room::SecretPassage, 60u8.wrapping_add(dx), 50);
                 port.world.safe_player = Position::new(Room::SecretPassage, 64, 50);
                 port.world.bridge = Position::new(Room::SecretPassage, 60, 50u8.wrapping_add(dy));
-                port.video.contacts.player_walls = true;
+                port.contacts.player_walls = true;
                 port.controls.left.direction.right = true;
                 port.world.joystick_direction = port.controls.left.direction;
                 let mut cpu = reference(&port);
@@ -289,10 +289,10 @@ fn bridge_rollback_pickup_and_carried_offsets_match_rom() {
         let mut port = initialized(Game::One);
         port.world.player = Position::new(Room::WestHall, 50, 50);
         port.world.sword = port.world.player;
-        port.world.visible[0] = Some(ObjectId::Sword);
+        port.display.visible[0] = Some(ObjectId::Sword);
         port.world.carrying.item = held;
         port.world.joystick_direction.right = true;
-        port.video.contacts.player_objects[0] = true;
+        port.contacts.player_objects[0] = true;
         let mut cpu = reference(&port);
         cpu.call(0xf556);
         port.handle_pickup_and_drop();
@@ -333,9 +333,9 @@ fn dragon_state_machine_matches_rom_across_games_and_difficulties() {
                     port.world.sword = Position::new(Room::WestHall, 60, 50);
                     port.world.dragon_mut(dragon).position = Position::new(Room::WestHall, 80, 50);
                     port.world.dragon_mut(dragon).state = state;
-                    port.world.visible[0] = Some(dragon.object());
-                    port.world.visible[1] = Some(ObjectId::Sword);
-                    port.video.contacts = Contacts {
+                    port.display.visible[0] = Some(dragon.object());
+                    port.display.visible[1] = Some(ObjectId::Sword);
+                    port.contacts = Contacts {
                         player_objects: [bits & 4 != 0, false],
                         objects_touch: bits & 8 != 0,
                         ..Contacts::default()
@@ -375,10 +375,10 @@ fn bat_gates_magnet_and_darkness_match_rom() {
     for value in [0, 1, 2, 27, 28, 29, 54, 55] {
         let mut port = initialized(Game::One);
         port.world.gates.gold = GateState::from_value(value);
-        port.world.visible[0] = Some(ObjectId::GoldGate);
-        port.world.visible[1] = Some(ObjectId::GoldKey);
-        port.video.contacts.objects_touch = true;
-        port.video.contacts.player_objects[0] = true;
+        port.display.visible[0] = Some(ObjectId::GoldGate);
+        port.display.visible[1] = Some(ObjectId::GoldKey);
+        port.contacts.objects_touch = true;
+        port.contacts.player_objects[0] = true;
         let mut cpu = reference(&port);
         cpu.call(0xf93c);
         port.update_castle_gates();
@@ -590,16 +590,16 @@ fn visible_selection_and_every_object_image_range_match_rom() {
             assert_state(&port, &cpu, "display selection");
             assert_eq!(
                 [
-                    port.world.visible[0]
+                    port.display.visible[0]
                         .map_or(port.world.bridge, |id| port.find_object_position(id))
                         .x,
-                    port.world.visible[0]
+                    port.display.visible[0]
                         .map_or(port.world.bridge, |id| port.find_object_position(id))
                         .y,
-                    port.world.visible[1]
+                    port.display.visible[1]
                         .map_or(port.world.bridge, |id| port.find_object_position(id))
                         .x,
-                    port.world.visible[1]
+                    port.display.visible[1]
                         .map_or(port.world.bridge, |id| port.find_object_position(id))
                         .y
                 ],
@@ -839,7 +839,7 @@ fn functional_kernel_matches_rom_output_order_for_every_room() {
             "{room:?}: pixels"
         );
         assert_eq!(
-            format!("{:?}", game.video.contacts),
+            format!("{:?}", game.contacts),
             format!("{:?}", raster.tia.contacts),
             "{room:?}: contacts"
         );
@@ -898,7 +898,7 @@ fn assert_picture_matches_rom(game: &mut Adventure, cpu: &mut Cpu, context: &str
         "{context}: pixels"
     );
     assert_eq!(
-        format!("{:?}", game.video.contacts),
+        format!("{:?}", game.contacts),
         format!("{:?}", raster.contacts),
         "{context}: contacts"
     );
@@ -956,7 +956,7 @@ fn empty_display_slots_keep_the_roms_blank_bridge_position_convention() {
     let mut cpu = reference(&game);
     cpu.call(0xf10f);
     game.prepare_room_display();
-    assert_eq!(game.world.visible, [None; 2]);
+    assert_eq!(game.display.visible, [None; 2]);
     assert_state(&game, &cpu, "empty display");
     assert_eq!(
         [
@@ -967,7 +967,7 @@ fn empty_display_slots_keep_the_roms_blank_bridge_position_convention() {
     );
     cpu.raster = Some(oracle::Raster::new(&cpu.memory));
     assert_picture_matches_rom(&mut game, &mut cpu, "empty display");
-    assert_eq!(game.video.contacts.player_objects, [false; 2]);
+    assert_eq!(game.contacts.player_objects, [false; 2]);
 }
 
 // Identical scripted controls exercise retained pictures across whole scheduler turns.
@@ -1075,9 +1075,9 @@ fn recording_is_observational_for_pictures_audio_contacts_and_world_state() {
     recorded.run(&mut recorded_host).unwrap();
     assert_eq!(plain_host.0.presented, recorded_host.0.presented);
     assert_eq!(reference(&plain).memory, reference(&recorded).memory);
-    assert_eq!(plain.video.contacts, recorded.video.contacts);
+    assert_eq!(plain.contacts, recorded.contacts);
     assert_eq!(plain.video.frame.pixels, recorded.video.frame.pixels);
-    assert!(plain.phase == recorded.phase);
+    assert!(plain.scheduler.phase == recorded.scheduler.phase);
 }
 
 #[test]

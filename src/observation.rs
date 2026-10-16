@@ -49,10 +49,10 @@ impl Adventure {
     }
 
     pub(super) fn trace_object_contact(&self) {
-        if self.video.contacts.objects_touch
+        if self.contacts.objects_touch
             && let (Some(first), Some(second)) = (
-                self.world.visible[0].map(object),
-                self.world.visible[1].map(object),
+                self.display.visible[0].map(object),
+                self.display.visible[1].map(object),
             )
         {
             self.trace_observe(Observation::Contact(first, ContactTarget::Object(second)));
@@ -209,7 +209,7 @@ impl Adventure {
     }
 
     pub(super) fn trace_player_contact(&self, slot: usize, positive: bool) {
-        if let Some(id) = self.world.visible[slot] {
+        if let Some(id) = self.display.visible[slot] {
             self.trace_contact(ContactTarget::Object(object(id)), positive);
         }
     }

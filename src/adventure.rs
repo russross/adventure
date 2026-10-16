@@ -6,7 +6,8 @@ use crate::recording::Recording;
 use crate::sound::{Sound, SoundEffect};
 use crate::validation::Validation;
 use crate::video::{
-    Appearance, HEIGHT, Object, ObjectLine, Picture, PlayfieldRow, SpriteWidth, Video, WIDTH,
+    Appearance, Contacts, Geometry, HEIGHT, Object, ObjectLine, Picture, PlayfieldRow, SpriteWidth,
+    Video, WIDTH,
 };
 use Exit::{ByGame, Fixed};
 use adventure_trace::{Point, Session};
@@ -482,8 +483,6 @@ pub struct World {
     pub game: Game,
     pub won: bool,
     pub carrying: Carrying,
-    pub visible: [Option<ObjectId>; 2],
-    pub last_candidate: ObjectId,
     pub joystick_direction: Direction,
     pub idle_ticks: u8,
     pub idle_periods: u8,
@@ -516,8 +515,6 @@ impl Default for World {
             game: Game::One,
             won: false,
             carrying: Carrying::default(),
-            visible: [Some(ObjectId::Light); 2],
-            last_candidate: ObjectId::Light,
             joystick_direction: Direction::default(),
             idle_ticks: 0,
             idle_periods: 0,
@@ -637,6 +634,8 @@ impl ObjectDisplay {
 }
 
 struct PreparedDisplay {
+    visible: [Option<ObjectId>; 2],
+    last_candidate: ObjectId,
     appearance: Appearance,
     objects: [Object; 2],
     walls: [PlayfieldRow; HEIGHT],
@@ -645,6 +644,8 @@ struct PreparedDisplay {
 impl Default for PreparedDisplay {
     fn default() -> Self {
         Self {
+            visible: [Some(ObjectId::Light); 2],
+            last_candidate: ObjectId::Light,
             appearance: Appearance {
                 mirrored: true,
                 player_width: 4,
@@ -671,6 +672,13 @@ pub struct Adventure {
     pub recording: Option<RefCell<Recording>>,
     pub validation: Option<Validation>,
     display: PreparedDisplay,
+    contacts: Contacts,
+    scheduler: Scheduler,
+}
+
+// These values advance on picture boundaries and survive ordinary world initialization.
+#[derive(Default)]
+struct Scheduler {
     player_visible: bool,
     phase: PicturePhase,
 }
@@ -730,10 +738,11 @@ impl Adventure {
     // Clear state once, place the fixed barriers, and initialize the selected world.
     fn power_on(&mut self, host: &mut impl FrameHost) -> Result<bool, String> {
         self.world = World::default();
-        self.phase = PicturePhase::Player;
+        self.scheduler.phase = PicturePhase::Player;
         self.video = Video::default();
+        self.contacts = Contacts::default();
         self.display = PreparedDisplay::default();
-        self.player_visible = false;
+        self.scheduler.player_visible = false;
         self.sound = Sound::default();
         if self
             .recording
@@ -762,7 +771,7 @@ impl Adventure {
             if !self.advance_picture(host)? {
                 return Ok(false);
             }
-            if self.phase == PicturePhase::Player {
+            if self.scheduler.phase == PicturePhase::Player {
                 return Ok(true);
             }
         }
@@ -770,7 +779,7 @@ impl Adventure {
 
     // Each phase makes its update boundary explicit and presents exactly once.
     pub fn advance_picture(&mut self, host: &mut impl FrameHost) -> Result<bool, String> {
-        match self.phase {
+        match self.scheduler.phase {
             PicturePhase::Player => {
                 if !self.poll_console_switches(host)? {
                     return Ok(false);
@@ -805,7 +814,7 @@ impl Adventure {
                 self.draw_room();
                 self.handle_pickup_and_drop();
                 self.trace_checkpoint();
-                self.phase = PicturePhase::BatAndGates;
+                self.scheduler.phase = PicturePhase::BatAndGates;
             }
             PicturePhase::BatAndGates => {
                 self.move_player(MovementPhase::Vertical);
@@ -829,7 +838,7 @@ impl Adventure {
                 self.trace_at(Point::Yorgle);
                 self.update_dragon(DragonId::Yorgle);
                 self.trace_checkpoint();
-                self.phase = PicturePhase::RemainingActors;
+                self.scheduler.phase = PicturePhase::RemainingActors;
             }
             PicturePhase::RemainingActors => {
                 if !self.present_picture(host)? {
@@ -844,7 +853,7 @@ impl Adventure {
                 self.update_magnet();
                 self.trace_checkpoint();
                 self.draw_room();
-                self.phase = PicturePhase::Player;
+                self.scheduler.phase = PicturePhase::Player;
             }
         }
         Ok(true)
@@ -1058,16 +1067,16 @@ impl Adventure {
 impl Adventure {
     // Contacts belong to the last drawn picture, including hidden layers and blank display slots.
     fn player_touches_slot(&self, slot: usize) -> bool {
-        let touching = self.video.contacts.player_objects[slot];
+        let touching = self.contacts.player_objects[slot];
         self.trace_player_contact(slot, touching);
         touching
     }
 
     fn player_touches_surface(&self, surface: Surface) -> bool {
         let touching = match surface {
-            Surface::Walls => self.video.contacts.player_walls,
-            Surface::LeftBarrier => self.video.contacts.player_barriers[0],
-            Surface::RightBarrier => self.video.contacts.player_barriers[1],
+            Surface::Walls => self.contacts.player_walls,
+            Surface::LeftBarrier => self.contacts.player_barriers[0],
+            Surface::RightBarrier => self.contacts.player_barriers[1],
         };
         self.trace_surface_contact(surface, touching);
         touching
@@ -1078,9 +1087,9 @@ impl Adventure {
         self.player_touches_surface(Surface::Walls)
             || self.player_touches_surface(Surface::LeftBarrier)
             || self.player_touches_surface(Surface::RightBarrier)
-                && self.world.visible[1] != Some(ObjectId::Dot)
-            || self.player_touches_slot(0) && self.world.visible[0] != Some(ObjectId::Light)
-            || self.player_touches_slot(1) && self.world.visible[1] != Some(ObjectId::Light)
+                && self.display.visible[1] != Some(ObjectId::Dot)
+            || self.player_touches_slot(0) && self.display.visible[0] != Some(ObjectId::Light)
+            || self.player_touches_slot(1) && self.display.visible[1] != Some(ObjectId::Light)
     }
 
     // Roll back blocked movement except within the bridge's traversable corridor.
@@ -1200,9 +1209,9 @@ impl Adventure {
             self.trace_checkpoint();
         }
         let touched = if self.player_touches_slot(0) {
-            self.world.visible[0]
+            self.display.visible[0]
         } else if self.player_touches_slot(1) {
-            self.world.visible[1]
+            self.display.visible[1]
         } else {
             return;
         };
@@ -1249,9 +1258,9 @@ impl Adventure {
 
     // Only the displayed slots can report player contact.
     fn is_touching_player(&self, object: ObjectId) -> bool {
-        if Some(object) == self.world.visible[0] {
+        if Some(object) == self.display.visible[0] {
             self.player_touches_slot(0)
-        } else if Some(object) == self.world.visible[1] {
+        } else if Some(object) == self.display.visible[1] {
             self.player_touches_slot(1)
         } else {
             false
@@ -1261,13 +1270,13 @@ impl Adventure {
     // Return the other member of a displayed object pair that touched.
     fn find_touching_object(&self, object: ObjectId) -> Option<ObjectId> {
         self.trace_object_contact();
-        if !self.video.contacts.objects_touch {
+        if !self.contacts.objects_touch {
             return None;
         }
-        if Some(object) == self.world.visible[0] {
-            self.world.visible[1]
-        } else if Some(object) == self.world.visible[1] {
-            self.world.visible[0]
+        if Some(object) == self.display.visible[0] {
+            self.display.visible[1]
+        } else if Some(object) == self.display.visible[1] {
+            self.display.visible[0]
         } else {
             None
         }
@@ -1523,7 +1532,7 @@ impl Adventure {
 impl Adventure {
     // Room layers remain frozen between display refreshes; the player is sampled for every picture.
     fn draw_room(&mut self) {
-        let player_rows = player_rows(self.world.player.y, self.player_visible);
+        let player_rows = player_rows(self.world.player.y, self.scheduler.player_visible);
         let picture = Picture {
             appearance: self.display.appearance,
             objects: self.display.objects,
@@ -1531,8 +1540,10 @@ impl Adventure {
             player_x: screen_x(positioned_object_x(self.world.player.x) - 1),
             player_visible: player_rows,
         };
-        self.player_visible = player_rows[HEIGHT - 1];
-        self.video.paint(&picture);
+        self.scheduler.player_visible = player_rows[HEIGHT - 1];
+        let geometry = Geometry::prepare(&picture);
+        self.contacts = geometry.contacts();
+        self.video.compose(&picture, &geometry);
     }
 
     // Appearance and images are a snapshot, reused by the following two pictures.
@@ -1543,15 +1554,15 @@ impl Adventure {
         self.display.walls = wall_rows(walls);
         self.display.appearance = appearance;
         self.select_visible_objects();
-        if self.world.visible[0] == Some(ObjectId::Light)
-            || self.world.visible[0] == Some(ObjectId::Bridge)
-                && self.world.visible[1] != Some(ObjectId::Light)
+        if self.display.visible[0] == Some(ObjectId::Light)
+            || self.display.visible[0] == Some(ObjectId::Bridge)
+                && self.display.visible[1] != Some(ObjectId::Light)
         {
-            self.world.visible.swap(0, 1);
+            self.display.visible.swap(0, 1);
         }
 
         // Resolve the live object's appearance once; following pictures reuse this snapshot.
-        for (slot, object) in self.world.visible.into_iter().enumerate() {
+        for (slot, object) in self.display.visible.into_iter().enumerate() {
             self.display.objects[slot] = match object {
                 Some(object) => self.object_display(object).prepare(slot),
                 // A blank slot retains the bridge position and black color but cannot make contacts.
@@ -1568,23 +1579,23 @@ impl Adventure {
 
     // Rotate over the real inhabitants, retaining at most two in this room.
     fn select_visible_objects(&mut self) {
-        self.world.visible = [None; 2];
-        let mut candidate = self.world.last_candidate;
+        self.display.visible = [None; 2];
+        let mut candidate = self.display.last_candidate;
         loop {
             candidate = OBJECT_IDS[(candidate as usize + 1) % OBJECT_IDS.len()];
             if self.find_object_position(candidate).room == self.world.player.room {
-                if self.world.visible[0].is_none() {
-                    self.world.visible[0] = Some(candidate);
+                if self.display.visible[0].is_none() {
+                    self.display.visible[0] = Some(candidate);
                 } else {
-                    self.world.visible[1] = Some(candidate);
+                    self.display.visible[1] = Some(candidate);
                     break;
                 }
             }
-            if candidate == self.world.last_candidate {
+            if candidate == self.display.last_candidate {
                 break;
             }
         }
-        self.world.last_candidate = candidate;
+        self.display.last_candidate = candidate;
     }
 
     // Wall artwork varies by room; darkness controls both the light and foreground priority.
