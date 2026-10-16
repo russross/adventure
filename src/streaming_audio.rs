@@ -5,14 +5,12 @@ use std::num::NonZeroU32;
 use sdl2::AudioSubsystem;
 use sdl2::audio::{AudioQueue, AudioSpecDesired};
 
-use crate::sound::{Sound, Synthesizer};
+use crate::sound::{PictureSynthesizer, Sound};
 
 pub(crate) struct StreamingAudio {
     pub(crate) device: AudioQueue<f32>,
-    synthesizer: Synthesizer,
+    synthesizer: PictureSynthesizer,
     sample_rate: u32,
-    sample_remainder: u32,
-    samples: Vec<f32>,
     muted: bool,
 }
 
@@ -35,10 +33,8 @@ impl StreamingAudio {
         device.resume();
         Ok(Self {
             device,
-            synthesizer: Synthesizer::new(sample_rate),
+            synthesizer: PictureSynthesizer::new(sample_rate),
             sample_rate: sample_rate.get(),
-            sample_remainder: 0,
-            samples: Vec::new(),
             muted: false,
         })
     }
@@ -54,18 +50,14 @@ impl StreamingAudio {
             }
             self.muted = muted;
         }
-        self.sample_remainder += self.sample_rate;
-        self.samples
-            .resize((self.sample_remainder / 60) as usize, 0.0);
-        self.sample_remainder %= 60;
-        self.synthesizer.render(sound, &mut self.samples);
+        let samples = self.synthesizer.render(sound);
 
         // Bound stale queued output when simulation runs ahead of the real device.
         if self.device.size() > self.sample_rate / 60 * 3 * size_of::<f32>() as u32 {
             self.device.clear();
         }
         if !muted {
-            self.device.queue_audio(&self.samples)?;
+            self.device.queue_audio(samples)?;
         }
         Ok(())
     }
@@ -74,6 +66,7 @@ impl StreamingAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sound::Synthesizer;
 
     #[test]
     #[ignore = "requires an SDL audio driver"]
@@ -96,13 +89,38 @@ mod tests {
             let mut expected = vec![0.0; (remainder / 60) as usize];
             remainder %= 60;
             reference.render(&sound, &mut expected);
-            assert_eq!(audio.samples, expected, "picture {picture}");
-            assert_eq!(audio.sample_remainder, remainder);
+            assert_eq!(audio.synthesizer.samples(), expected, "picture {picture}");
             if muted {
                 assert_eq!(audio.device.size(), 0);
                 assert_eq!(audio.device.status(), sdl2::audio::AudioStatus::Paused);
             }
         }
         assert_eq!(audio.device.status(), sdl2::audio::AudioStatus::Playing);
+    }
+
+    #[test]
+    #[ignore = "requires an SDL audio driver"]
+    fn backlog_replacement_discards_delivery_without_restarting_synthesis() {
+        let sdl = sdl2::init().unwrap();
+        let mut audio = StreamingAudio::new(&sdl.audio().unwrap()).unwrap();
+        // Freeze the consumer so queue sizes exercise the policy deterministically.
+        audio.device.pause();
+        let mut reference = PictureSynthesizer::new(NonZeroU32::new(audio.sample_rate).unwrap());
+        let mut sound = Sound::default();
+        sound.voice(8, 7, 9);
+        let mut queued_samples = 0;
+        for _ in 0..9 {
+            let expected = reference.render(&sound);
+            if queued_samples > audio.sample_rate / 60 * 3 {
+                queued_samples = 0;
+            }
+            audio.present(&sound, false).unwrap();
+            queued_samples += expected.len() as u32;
+            assert_eq!(audio.synthesizer.samples(), expected);
+            assert_eq!(
+                audio.device.size(),
+                queued_samples * size_of::<f32>() as u32
+            );
+        }
     }
 }

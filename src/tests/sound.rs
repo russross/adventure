@@ -1,5 +1,55 @@
 use super::*;
 
+#[test]
+fn digital_output_matches_independent_stella_capture_through_all_transitions() {
+    let mut oscillator = Oscillator::default();
+    for (segment, line) in include_str!("../../tests/stella-audio.txt")
+        .lines()
+        .enumerate()
+    {
+        let mut fields = line.split_whitespace();
+        let control = Channel {
+            waveform: fields.next().unwrap().parse().unwrap(),
+            frequency: fields.next().unwrap().parse().unwrap(),
+            volume: fields.next().unwrap().parse().unwrap(),
+        };
+        let expected = fields.next().unwrap();
+        assert!(fields.next().is_none());
+
+        // One oscillator lives across every segment, including silent mode and frequency changes.
+        for (clock, value) in expected.chars().enumerate() {
+            oscillator.tick(control);
+            assert_eq!(
+                oscillator.level(control) as u32,
+                value.to_digit(16).unwrap(),
+                "Stella segment {segment}, native clock {clock}, controls {control:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn picture_sample_clock_retains_fractional_samples_and_phase_when_output_is_discarded() {
+    let rate = NonZeroU32::new(44_101).unwrap();
+    let mut pictures = PictureSynthesizer::new(rate);
+    let mut reference = Synthesizer::new(rate);
+    let mut generated = 0;
+    for picture in 0..180 {
+        let sound = tone(
+            (picture % 16) as u8,
+            (picture % 32) as u8,
+            if (40..90).contains(&picture) { 0 } else { 9 },
+        );
+        let samples = pictures.render(&sound);
+        generated += samples.len();
+        let mut expected = vec![0.0; samples.len()];
+        reference.render(&sound, &mut expected);
+        assert_eq!(samples, expected);
+        assert_eq!(generated, ((picture + 1) * 44_101) / 60);
+    }
+    assert_eq!(generated, 44_101 * 3);
+}
+
 fn tone(mode: u8, frequency: u8, volume: u8) -> Sound {
     let mut sound = Sound::default();
     sound.voice(mode, frequency, volume);

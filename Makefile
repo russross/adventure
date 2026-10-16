@@ -14,6 +14,7 @@ MANIFESTS := Cargo.toml src/rawemulator/Cargo.toml src/trace/Cargo.toml
 .PHONY: all release adventure run format fmt lint check test smoke validate
 .PHONY: rom gameplay analysis verify rom-check mostlyclean clean flamegraph python-reference
 .PHONY: performance-build performance performance-check
+.PHONY: audio-reference
 
 Cargo.lock: $(MANIFESTS)
 	$(CARGO) generate-lockfile
@@ -59,6 +60,9 @@ flamegraph: Cargo.lock
 python-reference: Cargo.lock
 	$(CARGO) build --locked -p adventure --example python_reference
 
+audio-reference:
+	$(MAKE) -C tests/stella_audio check
+
 performance-build: Cargo.lock
 	$(CARGO) build --locked --release -p adventure --example adventure_performance
 
@@ -74,7 +78,9 @@ performance: performance-build
 mostlyclean:
 	rm -rf target/debug target/release/deps target/release/build target/release/incremental target/release/.fingerprint target/release/examples
 	$(ROM_MAKE) -C rom mostlyclean
+	$(MAKE) -C tests/stella_audio mostlyclean
 
 clean: mostlyclean
 	$(CARGO) clean
 	$(ROM_MAKE) -C rom clean
+	$(MAKE) -C tests/stella_audio clean

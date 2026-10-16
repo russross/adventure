@@ -31,3 +31,13 @@ The starting player occupies x=78–81, the Gold Key x=31–38, and the gate x=7
 The cartridge's final VBLANK store completes at CPU cycle 24. Stella's one-color-clock VBLANK delay and 68-clock horizontal blank yield `24*3+1-68 = 5` visible pixels. See [Stella's TIA implementation](https://github.com/stella-emu/stella/blob/7.0/src/emucore/tia/TIA.cxx). The original profile supplies this visible prefix to independent geometry and painting; the test-only functional raster clips its final row and the raw oracle applies the register delay. Tests distinguish contacts at x=4 from blanked contacts at x=5.
 
 Position regression cases also use debugger snapshots of the cartridge's `PositionDrawable` routine with a one-bit normal sprite. Recorded `(game x, screen x)` pairs include `(0,159)`, `(1,0)`, `(32,31)`, `(80,79)`, `(159,158)`, `(164,3)`, `(165,156)`, `(179,10)`, `(225,156)`, `(239,10)`, `(240,11)`, and `(255,26)`. These cover screen wrapping and the reset landing in horizontal blanking or a following scanline.
+
+
+Stella audio reference
+======================
+
+`stella-audio.txt` contains digital volume output from an uninterrupted Stella 7.0 audio channel. Each line contains decimal waveform, frequency, and volume controls followed by hexadecimal volume digits, one per complete `phase0`/`phase1` native clock pair. The 154 segments cover all waveform modes, changes while silent, resumption, and interleaved pickup/drop/roar/slain/swallow/victory register envelopes. Rust tests keep one oscillator alive across the entire fixture and compare every clock before PCM integration and filtering.
+
+Run `make audio-reference` to reproduce and compare the capture. `tests/stella_audio/Makefile` downloads [AudioChannel.cxx](https://github.com/stella-emu/stella/blob/7.0/src/emucore/tia/AudioChannel.cxx) and [AudioChannel.hxx](https://github.com/stella-emu/stella/blob/7.0/src/emucore/tia/AudioChannel.hxx), verifies their SHA-256 hashes, and compiles the unmodified files with a C++17 compiler. The local harness supplies register writes; its platform and serialization shims contain no synthesis behavior. Capture output stays under `target/`, and the build never overwrites the checked-in fixture. Normal tests use the saved fixture without downloads or compilation.
+
+PCM tests separately verify buffer-boundary invariance, channel mixing, filter behavior, and fractional sample counts at 44,101 Hz. SDL tests pause the consumer to check exact backlog replacement and verify that mute/discard policies retain synthesis phase. Gain and the 20 Hz DC-removal filter remain explicit presentation choices.

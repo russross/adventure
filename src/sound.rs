@@ -147,6 +147,38 @@ pub struct Synthesizer {
     dc_decay: f32,
 }
 
+/// Picture-clocked sample generation, independent of audio devices and delivery policies.
+pub struct PictureSynthesizer {
+    synthesizer: Synthesizer,
+    sample_rate: u32,
+    sample_remainder: u32,
+    samples: Vec<f32>,
+}
+
+impl PictureSynthesizer {
+    pub fn new(sample_rate: NonZeroU32) -> Self {
+        Self {
+            synthesizer: Synthesizer::new(sample_rate),
+            sample_rate: sample_rate.get(),
+            sample_remainder: 0,
+            samples: Vec::new(),
+        }
+    }
+
+    // Every accepted picture advances phase, even when the host discards or mutes these samples.
+    pub fn render(&mut self, sound: &Sound) -> &[f32] {
+        let accumulated = u64::from(self.sample_remainder) + u64::from(self.sample_rate);
+        self.samples.resize((accumulated / 60) as usize, 0.0);
+        self.sample_remainder = (accumulated % 60) as u32;
+        self.synthesizer.render(sound, &mut self.samples);
+        &self.samples
+    }
+
+    pub fn samples(&self) -> &[f32] {
+        &self.samples
+    }
+}
+
 impl Synthesizer {
     pub fn new(sample_rate: NonZeroU32) -> Self {
         Self {
