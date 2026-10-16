@@ -124,7 +124,7 @@ impl Adventure {
                 State::Counter(
                     Counter::Bite,
                     match dragon.state {
-                        DragonState::Biting(v) => v,
+                        DragonState::Biting(count) => count.remaining().wrapping_neg(),
                         _ => 0,
                     },
                 ),
@@ -138,8 +138,8 @@ impl Adventure {
             let mode = match gate {
                 GateState::Open => Mode::Open,
                 GateState::Closed => Mode::Closed,
-                GateState::Moving(v) if v < 28 => Mode::Closing,
-                GateState::Moving(_) => Mode::Opening,
+                GateState::Startup | GateState::Closing(_) => Mode::Closing,
+                GateState::Opening(_) => Mode::Opening,
             };
             self.trace_observe(Observation::State(object, State::Mode(mode)));
             self.trace_observe(Observation::State(
@@ -147,7 +147,9 @@ impl Adventure {
                 State::Counter(
                     Counter::Gate,
                     match gate {
-                        GateState::Moving(v) => v,
+                        GateState::Startup | GateState::Closing(_) | GateState::Opening(_) => {
+                            gate.original_value()
+                        }
                         _ => 0,
                     },
                 ),
@@ -179,7 +181,12 @@ impl Adventure {
         ));
         self.trace_observe(Observation::State(
             Object::Bat,
-            State::Counter(Counter::Flight, r.bat.flight_timer),
+            State::Counter(
+                Counter::Flight,
+                r.bat
+                    .flight_remaining
+                    .map_or(0, |ticks| ticks.get().wrapping_neg()),
+            ),
         ));
         self.trace_observe(Observation::State(Object::World, State::Game(game(r.game))));
         self.trace_observe(Observation::State(Object::World, State::Won(r.won)));

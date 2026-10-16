@@ -9,6 +9,7 @@ use crate::video::{
 };
 use Exit::{ByGame, Fixed};
 use adventure_trace::Point;
+use std::num::NonZeroU8;
 
 #[path = "controls.rs"]
 mod controls;
@@ -132,6 +133,16 @@ pub struct Position {
 impl Position {
     const fn new(room: Room, x: u8, y: u8) -> Self {
         Self { room, x, y }
+    }
+
+    // Vertical edges use signed wrapping distance; large byte values can lie below an edge.
+    fn below_edge(self, edge: u8) -> bool {
+        (self.y.wrapping_sub(edge) as i8) < 0
+    }
+
+    fn within_bat_reach(self, target: Self) -> bool {
+        let near = |from: u8, to: u8| to.wrapping_sub(from).wrapping_add(4) < 8;
+        self.room == target.room && near(self.x, target.x) && near(self.y, target.y)
     }
 }
 
@@ -284,22 +295,43 @@ pub enum DragonState {
     Wandering,
     Dead,
     Swallowed,
-    Biting(u8),
+    Biting(BiteCountdown),
+}
+
+/// Remaining dragon updates before a missed bite returns to wandering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BiteCountdown(NonZeroU8);
+
+impl BiteCountdown {
+    pub fn remaining(self) -> u8 {
+        self.0.get()
+    }
+
+    fn new(ticks: u8) -> Self {
+        Self(NonZeroU8::new(ticks).expect("a bite starts with a positive duration"))
+    }
+
+    fn advance(self) -> DragonState {
+        match NonZeroU8::new(self.remaining() - 1) {
+            Some(ticks) => DragonState::Biting(Self(ticks)),
+            None => DragonState::Wandering,
+        }
+    }
+
+    fn can_capture(self) -> bool {
+        self.remaining() <= 4
+    }
 }
 
 impl DragonState {
+    #[cfg(test)]
     fn from_value(value: u8) -> Self {
         match value {
             0 => Self::Wandering,
             1 => Self::Dead,
             2 => Self::Swallowed,
-            value => Self::Biting(value),
+            value => Self::Biting(BiteCountdown::new(value.wrapping_neg())),
         }
-    }
-
-    // A missed bite wraps back to wandering; intermediate values keep the biting image.
-    fn advance_bite(count: u8) -> Self {
-        Self::from_value(count.wrapping_add(1))
     }
 }
 
@@ -340,50 +372,81 @@ pub struct Bat {
     pub direction: Direction,
     pub animation: u8,
     pub carried: Option<BatCargo>,
-    pub flight_timer: u8,
+    pub flight_remaining: Option<NonZeroU8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GateState {
     Open,
     Closed,
-    Moving(u8),
+    Startup,
+    Closing(ClosingProgress),
+    Opening(OpeningProgress),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClosingProgress(u8);
+
+impl ClosingProgress {
+    pub fn remaining(self) -> u8 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpeningProgress(u8);
+
+impl OpeningProgress {
+    pub fn elapsed(self) -> u8 {
+        self.0
+    }
 }
 
 impl Default for GateState {
     fn default() -> Self {
-        Self::Moving(0)
+        Self::Startup
     }
 }
 
 impl GateState {
-    fn value(self) -> u8 {
+    pub fn original_value(self) -> u8 {
         match self {
             Self::Open => 1,
             Self::Closed => 28,
-            Self::Moving(value) => value,
+            Self::Startup => 0,
+            Self::Closing(progress) => 28 - progress.remaining(),
+            Self::Opening(progress) => 28 + progress.elapsed(),
         }
     }
+    #[cfg(test)]
     fn from_value(value: u8) -> Self {
         match value {
             1 => Self::Open,
             28 => Self::Closed,
-            value => Self::Moving(value),
+            0 => Self::Startup,
+            2..=27 => Self::Closing(ClosingProgress(28 - value)),
+            value => Self::Opening(OpeningProgress(value - 28)),
         }
     }
 
     fn on_key_contact(self) -> Self {
-        Self::from_value(self.value().wrapping_add(1))
+        match self {
+            Self::Startup => Self::Open,
+            Self::Open => Self::Closing(ClosingProgress(26)),
+            Self::Closed => Self::Opening(OpeningProgress(1)),
+            Self::Closing(progress) if progress.remaining() == 1 => Self::Closed,
+            Self::Closing(progress) => Self::Closing(ClosingProgress(progress.remaining() - 1)),
+            Self::Opening(progress) if progress.elapsed() == 227 => Self::Startup,
+            Self::Opening(progress) => Self::Opening(OpeningProgress(progress.elapsed() + 1)),
+        }
     }
 
     // Entry can stop the animation before its next tick. The endpoints retain their encoded values.
     fn advance_animation(self) -> Self {
         match self {
-            Self::Moving(value) => match value.wrapping_add(1) {
-                56 => Self::Open,
-                next => Self::from_value(next),
-            },
-            _ => self,
+            Self::Open | Self::Closed => self,
+            Self::Opening(progress) if progress.elapsed() == 27 => Self::Open,
+            _ => self.on_key_contact(),
         }
     }
 }
@@ -1093,7 +1156,7 @@ impl Adventure {
             }
             let position = self.world.position(record);
             let (_, _, inside, outside) = gate.castle();
-            if position.room != inside || (position.y.wrapping_sub(13) as i8) >= 0 {
+            if position.room != inside || !position.below_edge(13) {
                 continue;
             }
             *self.world.position_mut(record) = Position::new(outside, 80, 44);
@@ -1102,7 +1165,7 @@ impl Adventure {
             return;
         }
         let mut position = self.world.position(record);
-        let exit = if (position.y.wrapping_sub(106) as i8) >= 0 {
+        let exit = if !position.below_edge(106) {
             position.y = 13;
             RoomEdge::North
         } else if position.x < 3 || position.x >= 240 {
@@ -1364,12 +1427,13 @@ impl Adventure {
                 if self.is_touching_player(object) {
                     let difficulty = self.read_left_difficulty();
                     let delay = match (self.world.game, difficulty) {
-                        (Game::One, Difficulty::B) => 0xd0,
-                        (Game::One, Difficulty::A) => 0xe8,
-                        (Game::Two | Game::Three, Difficulty::B) => 0xf0,
-                        (Game::Two | Game::Three, Difficulty::A) => 0xf6,
+                        (Game::One, Difficulty::B) => 48,
+                        (Game::One, Difficulty::A) => 24,
+                        (Game::Two | Game::Three, Difficulty::B) => 16,
+                        (Game::Two | Game::Three, Difficulty::A) => 10,
                     };
-                    self.world.dragon_mut(dragon).state = DragonState::Biting(delay);
+                    self.world.dragon_mut(dragon).state =
+                        DragonState::Biting(BiteCountdown::new(delay));
                     self.world.dragon_mut(dragon).position.x = self.world.safe_player.x;
                     self.world.dragon_mut(dragon).position.y = self.world.safe_player.y;
                     self.start_effect(SoundEffect::Roar, 16);
@@ -1390,9 +1454,11 @@ impl Adventure {
                 self.world.safe_player = self.world.player;
             }
             DragonState::Biting(count) => {
-                self.world.dragon_mut(dragon).state = DragonState::advance_bite(count);
-                let count = count.wrapping_add(1);
-                if count < 252 || !self.is_touching_player(object) {
+                let next = count.advance();
+                self.world.dragon_mut(dragon).state = next;
+                if !matches!(next, DragonState::Biting(remaining) if remaining.can_capture())
+                    || !self.is_touching_player(object)
+                {
                     return;
                 }
                 self.world.dragon_mut(dragon).state = DragonState::Swallowed;
@@ -1410,8 +1476,8 @@ impl Adventure {
         if self.world.bat.animation == 8 {
             self.world.bat.animation = 0;
         }
-        if self.world.bat.flight_timer != 0 {
-            self.world.bat.flight_timer = self.world.bat.flight_timer.wrapping_add(1);
+        if let Some(remaining) = self.world.bat.flight_remaining {
+            self.world.bat.flight_remaining = NonZeroU8::new(remaining.get() - 1);
             self.move_object_through_world(RecordId::Bat, self.world.bat.direction, 3);
         } else {
             // Cargo is excluded from the bat's ordered targets until its commitment ends.
@@ -1444,12 +1510,9 @@ impl Adventure {
             if let Some(cargo) = target {
                 let target = self.world.position(cargo.record());
                 let bat = self.world.bat.position;
-                if target.room == bat.room
-                    && target.x.wrapping_sub(bat.x).wrapping_add(4) & 0xf8 == 0
-                    && target.y.wrapping_sub(bat.y).wrapping_add(4) & 0xf8 == 0
-                {
+                if bat.within_bat_reach(target) {
                     self.world.bat.carried = Some(cargo);
-                    self.world.bat.flight_timer = 16;
+                    self.world.bat.flight_remaining = NonZeroU8::new(240);
                 }
             }
         }
@@ -1675,7 +1738,7 @@ impl Adventure {
 
     // Gates grow to full height, then retract, changing two bitmap rows every four ticks.
     fn gate_image(&self, gate: GateId) -> &'static [u8] {
-        let value = self.world.gates.get(gate).value();
+        let value = self.world.gates.get(gate).original_value();
         let stage = usize::from(value.saturating_sub(1) / 4).min(12);
         let start = stage.abs_diff(6) * 2;
         &GATE_IMAGE[start..]

@@ -3,7 +3,7 @@
 use std::io::{self, BufWriter, Write};
 use std::process::ExitCode;
 
-use adventure::adventure::{Adventure, GateState, Position};
+use adventure::adventure::{Adventure, Position};
 use adventure::input::{Controls, Difficulty, Direction, Joystick};
 use adventure::runtime::FrameHost;
 use adventure::sound::Sound;
@@ -118,11 +118,7 @@ fn world_bytes(game: &Adventure) -> Vec<u8> {
         world.idle_periods,
     ]);
     for gate in [world.gates.gold, world.gates.white, world.gates.black] {
-        bytes.push(match gate {
-            GateState::Open => 1,
-            GateState::Closed => 28,
-            GateState::Moving(value) => value,
-        });
+        bytes.push(gate.original_value());
     }
     bytes
 }

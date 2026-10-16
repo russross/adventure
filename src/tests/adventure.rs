@@ -8,6 +8,7 @@ use crate::runtime::FrameHost;
 use crate::sound::Sound;
 use crate::video::{Contacts, Frame, HEIGHT};
 use adventure_trace::Session;
+use std::num::NonZeroU8;
 
 #[path = "rom_oracle.rs"]
 mod oracle;
@@ -103,19 +104,23 @@ fn reference(game: &Adventure) -> Cpu {
             DragonState::Wandering => 0,
             DragonState::Dead => 1,
             DragonState::Swallowed => 2,
-            DragonState::Biting(value) => value,
+            DragonState::Biting(count) => count.remaining().wrapping_neg(),
         };
     }
-    cpu.memory[0xc8] = game.world.gates.gold.value();
-    cpu.memory[0xc9] = game.world.gates.white.value();
-    cpu.memory[0xca] = game.world.gates.black.value();
+    cpu.memory[0xc8] = game.world.gates.gold.original_value();
+    cpu.memory[0xc9] = game.world.gates.white.original_value();
+    cpu.memory[0xca] = game.world.gates.black.original_value();
     cpu.memory[0xce] = direction_byte(game.world.bat.direction);
     cpu.memory[0xcf] = game.world.bat.animation;
     cpu.memory[0xd0] = game.world.bat.carried.map_or(0x78, |cargo| {
         let record = cargo.record();
         RECORDS.iter().find(|(_, r)| *r == record).unwrap().0 as u8
     });
-    cpu.memory[0xd1] = game.world.bat.flight_timer;
+    cpu.memory[0xd1] = game
+        .world
+        .bat
+        .flight_remaining
+        .map_or(0, |ticks| ticks.get().wrapping_neg());
     cpu.memory[0x95] = descriptor(game.display.visible[0]);
     cpu.memory[0x96] = descriptor(game.display.visible[1]);
     cpu.memory[0x9c] = game.display.last_candidate as u8 * 9;
@@ -304,6 +309,43 @@ fn bridge_rollback_pickup_and_carried_offsets_match_rom() {
 }
 
 #[test]
+fn aligned_magnet_target_prevents_later_targets_from_moving() {
+    let mut game = initialized(Game::One);
+    game.world.magnet = Position::new(Room::WestHall, 70, 70);
+    game.world.gold_key = Position::new(Room::WestHall, 70, 62);
+    game.world.sword = Position::new(Room::WestHall, 20, 20);
+    game.update_magnet();
+    assert_eq!(game.world.gold_key, Position::new(Room::WestHall, 70, 62));
+    assert_eq!(game.world.sword, Position::new(Room::WestHall, 20, 20));
+}
+
+#[test]
+fn sword_contact_overrides_a_bite_started_during_the_same_update() {
+    let mut game = initialized(Game::One);
+    game.display.visible = [Some(ObjectId::Yorgle), Some(ObjectId::Sword)];
+    game.contacts.player_objects[0] = true;
+    game.contacts.objects_touch = true;
+    game.update_dragon(DragonId::Yorgle);
+    assert_eq!(game.world.yorgle.state, DragonState::Dead);
+    assert_eq!(game.world.sound_effect, SoundEffect::DragonSlain);
+}
+
+#[test]
+fn dropping_can_immediately_pick_up_the_same_touching_item() {
+    let mut game = initialized(Game::One);
+    game.world.player = Position::new(Room::WestHall, 70, 50);
+    game.world.sword = game.world.player;
+    game.world.carrying.item = HeldObject::Item(Carryable::Sword);
+    game.world.fire_was_pressed = false;
+    game.controls.left.fire = true;
+    game.display.visible = [Some(ObjectId::Sword), None];
+    game.contacts.player_objects[0] = true;
+    game.handle_pickup_and_drop();
+    assert_eq!(game.world.carrying.item, HeldObject::Item(Carryable::Sword));
+    assert_eq!(game.world.sound_effect, SoundEffect::Pickup);
+}
+
+#[test]
 fn dragon_state_machine_matches_rom_across_games_and_difficulties() {
     for game in [Game::One, Game::Two, Game::Three] {
         for dragon in [DragonId::Rhindle, DragonId::Yorgle, DragonId::Grundle] {
@@ -311,9 +353,9 @@ fn dragon_state_machine_matches_rom_across_games_and_difficulties() {
                 DragonState::Wandering,
                 DragonState::Dead,
                 DragonState::Swallowed,
-                DragonState::Biting(232),
-                DragonState::Biting(251),
-                DragonState::Biting(255),
+                DragonState::from_value(232),
+                DragonState::from_value(251),
+                DragonState::from_value(255),
             ] {
                 for bits in 0..16 {
                     let mut port = initialized(game);
@@ -360,10 +402,10 @@ fn dragon_state_machine_matches_rom_across_games_and_difficulties() {
 
 #[test]
 fn bat_gates_magnet_and_darkness_match_rom() {
-    for timer in [0, 1, 16, 255] {
+    for timer in [0u8, 1, 16, 255] {
         let mut port = initialized(Game::Two);
         port.world.bat.position = Position::new(Room::WestHall, 60, 50);
-        port.world.bat.flight_timer = timer;
+        port.world.bat.flight_remaining = NonZeroU8::new(timer.wrapping_neg());
         port.world.chalice = Position::new(Room::WestHall, 61, 50);
         port.world.carrying.item = HeldObject::Item(Carryable::Chalice);
         let mut cpu = reference(&port);
@@ -371,7 +413,7 @@ fn bat_gates_magnet_and_darkness_match_rom() {
         port.update_bat();
         assert_state(&port, &cpu, "bat");
     }
-    for value in [0, 1, 2, 27, 28, 29, 54, 55] {
+    for value in 0..=255 {
         let mut port = initialized(Game::One);
         port.world.gates.gold = GateState::from_value(value);
         port.display.visible[0] = Some(ObjectId::GoldGate);
@@ -560,7 +602,7 @@ fn reinitialization_preserves_retained_state_like_the_rom() {
         port.world.sound_effect = SoundEffect::Roar;
         port.world.rhindle.state = DragonState::Dead;
         port.world.bat.carried = Some(BatCargo::Item(Carryable::Chalice));
-        port.world.bat.flight_timer = 99;
+        port.world.bat.flight_remaining = NonZeroU8::new(157);
         port.sound.voice(8, 12, 3);
 
         // Initialization resets actors but retains counters, light, offsets, audio, and appearance.
