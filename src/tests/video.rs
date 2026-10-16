@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn moving_and_erasing_sprites_recomposes_only_affected_rows() {
+    let mut picture = Picture::default();
+    picture.objects[0].line.color = 72;
+    picture.objects[0].rows[10] = 0xff;
+    let mut video = Video::default();
+    video.paint(&picture);
+    assert_eq!(
+        video.frame.changed_rows.as_slice(),
+        std::slice::from_ref(&(0..HEIGHT))
+    );
+    video.paint(&picture);
+    assert!(video.frame.changed_rows.is_empty());
+
+    // Erase the old location and paint the new one without touching intervening rows.
+    picture.objects[0].rows[10] = 0;
+    picture.objects[0].rows[12] = 0xff;
+    video.paint(&picture);
+    assert_eq!(video.frame.changed_rows, [10..11, 12..13]);
+    assert_eq!(video.frame.pixels, reference_picture(&picture).0);
+
+    // Global color changes and erasure still reconstruct the full reference picture.
+    picture.appearance.background = 8;
+    video.paint(&picture);
+    assert_eq!(
+        video.frame.changed_rows.as_slice(),
+        std::slice::from_ref(&(0..HEIGHT))
+    );
+    assert_eq!(video.frame.pixels, reference_picture(&picture).0);
+    picture.objects[0].rows[12] = 0;
+    video.paint(&picture);
+    assert_eq!(
+        video.frame.changed_rows.as_slice(),
+        std::slice::from_ref(&(12..13))
+    );
+    assert_eq!(video.frame.pixels, reference_picture(&picture).0);
+}
+
+#[test]
 fn collision_geometry_can_run_without_painting_and_survive_replacement_artwork() {
     let picture = Picture {
         player_visible: [true; HEIGHT],

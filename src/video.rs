@@ -234,6 +234,8 @@ pub struct Contacts {
 pub struct Frame {
     pub pixels: Vec<u8>,
     pub painted_lines: usize,
+    /// Rows recomposed by the latest paint, including changes hidden by priority.
+    pub changed_rows: Vec<Range<usize>>,
 }
 
 impl Default for Frame {
@@ -241,6 +243,7 @@ impl Default for Frame {
         Self {
             pixels: vec![0; WIDTH * HEIGHT],
             painted_lines: 0,
+            changed_rows: Vec::new(),
         }
     }
 }
@@ -250,6 +253,15 @@ pub struct Video {
     pub frame: Frame,
     pub contacts: Contacts,
     retained: Option<(Picture, Contacts)>,
+    composed: Vec<Option<PaintedRow>>,
+}
+
+// Appearance only includes values that affect composition; geometry already encodes widths and mirroring.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PaintedRow {
+    geometry: GeometryRow,
+    colors: [u8; 4],
+    foreground_priority: bool,
 }
 
 impl Video {
@@ -261,6 +273,7 @@ impl Video {
         {
             self.contacts = *contacts;
             self.frame.painted_lines = HEIGHT;
+            self.frame.changed_rows.clear();
             return;
         }
         let geometry = Geometry::prepare(picture);
@@ -273,11 +286,32 @@ impl Video {
     pub fn compose(&mut self, picture: &Picture, geometry: &Geometry) {
         self.retained = None;
         let appearance = picture.appearance;
-        for (row, pixels) in geometry
+        self.composed.resize(HEIGHT, None);
+        self.frame.changed_rows.clear();
+        let mut changed_start = None;
+        for (y, (row, pixels)) in geometry
             .rows
             .iter()
             .zip(self.frame.pixels.chunks_exact_mut(WIDTH))
+            .enumerate()
         {
+            let current = PaintedRow {
+                geometry: *row,
+                colors: [
+                    appearance.background,
+                    appearance.foreground,
+                    picture.objects[0].line.color,
+                    picture.objects[1].line.color,
+                ],
+                foreground_priority: appearance.walls_in_front,
+            };
+            if self.composed[y] == Some(current) {
+                if let Some(first) = changed_start.take() {
+                    self.frame.changed_rows.push(first..y);
+                }
+                continue;
+            }
+            changed_start.get_or_insert(y);
             pixels.fill(appearance.background);
             let foreground = row.walls.union(row.player);
             foreground.paint(pixels, appearance.foreground);
@@ -290,6 +324,10 @@ impl Video {
                 }
                 mask.paint(pixels, picture.objects[slot].line.color);
             }
+            self.composed[y] = Some(current);
+        }
+        if let Some(first) = changed_start {
+            self.frame.changed_rows.push(first..HEIGHT);
         }
         self.frame.painted_lines = HEIGHT;
     }
