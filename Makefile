@@ -10,7 +10,7 @@ UV ?= uv
 ROM_MAKE ?= $(shell command -v gmake 2>/dev/null || command -v make)
 PYTHON ?= python3
 DASM ?= $(abspath rom/tools/dasm)
-MANIFESTS := Cargo.toml src/rawemulator/Cargo.toml src/trace/Cargo.toml
+MANIFESTS := Cargo.toml src/rawemulator/Cargo.toml src/trace/Cargo.toml ../crt/Cargo.toml
 .PHONY: all release adventure run format fmt lint check test smoke validate
 .PHONY: rom gameplay analysis verify rom-check mostlyclean clean flamegraph python-reference
 .PHONY: performance-build performance performance-check

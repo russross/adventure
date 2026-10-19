@@ -13,6 +13,7 @@ use sdl2::render::{Canvas, Texture};
 use sdl2::surface::Surface;
 use sdl2::video::Window;
 
+use crate::crt_display::CrtDisplay;
 use crate::input::{Controls, Difficulty, Direction, Joystick};
 use crate::sound::Sound;
 use crate::streaming_audio::StreamingAudio;
@@ -71,7 +72,16 @@ impl KeyboardConsole {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RendererMode {
+    #[default]
+    Crt,
+    Simple,
+}
+
 pub struct SdlHardware {
+    renderer: RendererMode,
+    crt: CrtDisplay,
     _sdl: sdl2::Sdl,
     canvas: Canvas<Window>,
     texture: Texture,
@@ -92,10 +102,18 @@ pub struct SdlHardware {
 
 impl SdlHardware {
     pub fn new(paced: bool, frame_limit: Option<usize>) -> Result<Self, String> {
+        Self::with_renderer(paced, frame_limit, RendererMode::default())
+    }
+
+    pub fn with_renderer(
+        paced: bool,
+        frame_limit: Option<usize>,
+        renderer: RendererMode,
+    ) -> Result<Self, String> {
         let sdl = sdl2::init()?;
         let video = sdl.video()?;
         let window = video
-            .window("Adventure", WINDOW_WIDTH * 3, WINDOW_HEIGHT * 3)
+            .window("Adventure", WINDOW_WIDTH * 5, WINDOW_HEIGHT * 5)
             .position_centered()
             .resizable()
             .build()
@@ -116,6 +134,8 @@ impl SdlHardware {
         let events = sdl.event_pump()?;
         let audio = StreamingAudio::new(&sdl.audio()?)?;
         Ok(Self {
+            renderer,
+            crt: CrtDisplay::new()?,
             _sdl: sdl,
             canvas,
             texture,
@@ -136,6 +156,18 @@ impl SdlHardware {
     }
 
     pub fn save_snapshot(&mut self, path: &Path) -> Result<(), String> {
+        if self.renderer == RendererMode::Crt {
+            // Snapshot requests also work before the first presentation or after a size shortcut.
+            let frame = Frame {
+                pixels: self
+                    .indexed
+                    .clone()
+                    .unwrap_or_else(|| vec![0; WIDTH * HEIGHT]),
+                ..Frame::default()
+            };
+            self.crt.update(&mut self.canvas, &frame)?;
+            return self.crt.save_snapshot(path);
+        }
         let pitch = self.pixels.pitch() as u32;
         let surface = Surface::from_data(
             &mut self.pixels.bytes,
@@ -148,6 +180,10 @@ impl SdlHardware {
         surface
             .convert_format(PixelFormatEnum::RGB24)?
             .save_bmp(path)
+    }
+
+    pub fn renderer(&self) -> RendererMode {
+        self.renderer
     }
 
     pub fn is_muted(&self) -> bool {
@@ -186,11 +222,24 @@ impl FrameHost for SdlHardware {
                         Keycode::M => {
                             self.muted = !self.muted;
                         }
-                        Keycode::Num1 | Keycode::Num2 | Keycode::Num3 => {
+                        Keycode::C => {
+                            self.renderer = match self.renderer {
+                                RendererMode::Crt => RendererMode::Simple,
+                                RendererMode::Simple => RendererMode::Crt,
+                            };
+                            self.refresh.redraw();
+                        }
+                        Keycode::Num1
+                        | Keycode::Num2
+                        | Keycode::Num3
+                        | Keycode::Num4
+                        | Keycode::Num5 => {
                             let scale = match key {
                                 Keycode::Num1 => 1,
                                 Keycode::Num2 => 2,
-                                _ => 3,
+                                Keycode::Num3 => 3,
+                                Keycode::Num4 => 4,
+                                _ => 5,
                             };
                             self.canvas
                                 .window_mut()
@@ -224,6 +273,7 @@ impl FrameHost for SdlHardware {
 
         // Device resets require a new texture and a complete upload even for unchanged pixels.
         if self.refresh == DisplayRefresh::RecreateTexture {
+            self.crt.reset_texture();
             self.texture = self.pixels.create_texture(&mut self.canvas)?;
             self.indexed = None;
             self.refresh = DisplayRefresh::Redraw;
@@ -244,11 +294,19 @@ impl FrameHost for SdlHardware {
         self.indexed
             .get_or_insert_with(|| vec![0; WIDTH * HEIGHT])
             .copy_from_slice(&frame.pixels);
+        let crt_changed = if self.renderer == RendererMode::Crt {
+            self.crt.update(&mut self.canvas, frame)?
+        } else {
+            false
+        };
         // Each redraw rebuilds the transient backbuffer; idle boundaries leave the window alone.
-        if !spans.is_empty() || self.refresh != DisplayRefresh::Clean {
+        if crt_changed || !spans.is_empty() || self.refresh != DisplayRefresh::Clean {
             self.refresh.redraw();
             self.canvas.clear();
-            self.canvas.copy(&self.texture, None, None)?;
+            match self.renderer {
+                RendererMode::Crt => self.crt.draw(&mut self.canvas)?,
+                RendererMode::Simple => self.canvas.copy(&self.texture, None, None)?,
+            }
             self.canvas.present();
             self.refresh = DisplayRefresh::Clean;
             #[cfg(test)]

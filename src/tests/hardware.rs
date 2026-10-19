@@ -102,7 +102,7 @@ fn packed_texture_formats_preserve_every_palette_color_and_snapshot() {
 #[test]
 #[ignore = "requires an SDL video and audio driver; run with dummy drivers in headless environments"]
 fn sdl_idle_redraws_resets_uploads_and_frame_boundaries() {
-    let mut hardware = SdlHardware::new(false, Some(12)).unwrap();
+    let mut hardware = SdlHardware::with_renderer(false, Some(12), RendererMode::Simple).unwrap();
     let sound = Sound::default();
     let mut frame = Frame::default();
     hardware.present(&frame, &sound).unwrap();
@@ -210,4 +210,31 @@ fn stella_controls_and_aliases_remain_independent() {
     assert_eq!(keyboard.sample().left_difficulty, Difficulty::B);
     assert_eq!(keyboard.sample().right_difficulty, Difficulty::B);
     assert!(keyboard.sample().color);
+}
+
+#[test]
+#[ignore = "requires an SDL video and audio driver"]
+fn crt_retained_updates_match_fresh_render_after_resize_and_reset() {
+    let mut hardware = SdlHardware::new(false, None).unwrap();
+    hardware.canvas.window_mut().set_size(320, 194).unwrap();
+    let mut frame = Frame::default();
+    frame.pixels.fill(28);
+    hardware.present(&frame, &Sound::default()).unwrap();
+    assert!(!hardware.crt.update(&mut hardware.canvas, &frame).unwrap());
+
+    // Motion erases old pixels and changes neighboring light through the analog filters.
+    frame.pixels[60 * WIDTH + 30..60 * WIDTH + 40].fill(72);
+    hardware.crt.update(&mut hardware.canvas, &frame).unwrap();
+    let mut fresh = CrtDisplay::new().unwrap();
+    fresh.update(&mut hardware.canvas, &frame).unwrap();
+    assert_eq!(hardware.crt.bytes, fresh.bytes);
+
+    hardware.canvas.window_mut().set_size(640, 388).unwrap();
+    hardware.sample_controls().unwrap();
+    hardware.crt.update(&mut hardware.canvas, &frame).unwrap();
+    fresh.update(&mut hardware.canvas, &frame).unwrap();
+    assert_eq!(hardware.crt.bytes, fresh.bytes);
+    hardware.crt.reset_texture();
+    assert!(hardware.crt.update(&mut hardware.canvas, &frame).unwrap());
+    assert_eq!(hardware.crt.bytes, fresh.bytes);
 }

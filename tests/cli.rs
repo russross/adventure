@@ -82,6 +82,8 @@ fn invalid_mode_combinations_fail_before_opening_files() {
         vec!["--headless", "--display"],
         vec!["--headless"],
         vec!["--frames", "0"],
+        vec!["--renderer"],
+        vec!["--renderer", "unknown"],
         vec!["--headless", "--snapshot", "unused"],
         vec!["--record", "same", "--trace", "same"],
     ] {
@@ -90,5 +92,18 @@ fn invalid_mode_combinations_fail_before_opening_files() {
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(!error.contains("No such file"), "{error}");
         assert!(!error.contains("panicked"), "{error}");
+    }
+}
+
+#[test]
+fn renderer_modes_are_accepted_without_initializing_sdl_headlessly() {
+    for renderer in ["crt", "simple"] {
+        succeeds(run(&[
+            "--headless",
+            "--frames",
+            "1",
+            "--renderer",
+            renderer,
+        ]));
     }
 }

@@ -21,10 +21,11 @@ required-features = ["sdl", "validation"]
 
 [features]
 default = ["sdl", "validation"]
-sdl = ["dep:sdl2"]
+sdl = ["dep:sdl2", "dep:crt"]
 validation = ["dep:rawemulator"]
 
 [dependencies]
+crt = { path = "../crt", optional = true }
 adventure-trace.workspace = true
 sdl2 = { workspace = true, features = ["unsafe_textures"], optional = true }
 

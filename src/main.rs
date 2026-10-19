@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process;
 
 use adventure::adventure::Adventure;
-use adventure::hardware::{FrameHost, SdlHardware};
+use adventure::hardware::{FrameHost, RendererMode, SdlHardware};
 use adventure::input::Controls;
 use adventure::recording::Recording;
 use adventure::replay::{PlaybackHost, ReplayHost};
@@ -33,6 +33,7 @@ struct Options {
     record: Option<PathBuf>,
     trace: Option<PathBuf>,
     validate: bool,
+    renderer: RendererMode,
 }
 
 // Presentation selection never changes the recorded input or semantic clocks.
@@ -61,7 +62,7 @@ fn print_controls() {
     println!(
         "Move: arrows / keypad 8,2,4,6; fire/drop: Space / Left Ctrl / keypad 5\n\
          Select: F1 / Tab; reset/start: F2 / Enter; color/B&W: F3/F4\n\
-         Difficulty: left F5/F6, right F7/F8; mute: M; size: 1/2/3\n\
+         Difficulty: left F5/F6, right F7/F8; mute: M; renderer: C; size: 1/2/3/4/5\n\
          Quit: Escape / Ctrl+Q / Cmd+Q"
     );
 }
@@ -84,6 +85,13 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Options>, String> 
                     return Err("select only one of --headless and --display".into());
                 }
                 options.headless = Some(argument == "--headless");
+            }
+            "--renderer" => {
+                options.renderer = match args.next().as_deref() {
+                    Some("crt") => RendererMode::Crt,
+                    Some("simple") => RendererMode::Simple,
+                    _ => return Err("--renderer needs crt or simple".into()),
+                };
             }
             "--unpaced" => options.unpaced = true,
             "--validate" => options.validate = true,
@@ -125,6 +133,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Options>, String> 
                     --validate      Validate live play against the cartridge without saving a trace\n\
                     --headless      Run silently at full speed without SDL\n\
                     --display       Run with display, sound, and 60 Hz pacing\n\
+                    --renderer MODE Select crt (default) or simple rendering\n\
                     --unpaced       Disable display pacing\n\
                     --frames N      Stop live play after N pictures\n\
                     --snapshot FILE Save the final displayed picture as BMP"
@@ -226,9 +235,10 @@ fn execute() -> Result<(), String> {
         })))
     } else {
         print_controls();
-        Host::Display(Box::new(SdlHardware::new(
+        Host::Display(Box::new(SdlHardware::with_renderer(
             !options.unpaced,
             options.frames.map(NonZeroUsize::get),
+            options.renderer,
         )?))
     };
     if let Some(frames) = playback_frames {

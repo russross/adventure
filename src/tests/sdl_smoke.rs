@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process;
 
 use adventure::adventure::{Adventure, ObjectId, Room};
-use adventure::hardware::{FrameHost, SdlHardware};
+use adventure::hardware::{FrameHost, RendererMode, SdlHardware};
 use adventure::input::Controls;
 use adventure::replay::PlaybackHost;
 use adventure::sound::{Sound, Synthesizer};
@@ -40,6 +40,12 @@ impl FrameHost for Session {
             22 | 28 => Some((Keycode::Num2, false)),
             24 => Some((Keycode::Num3, true)),
             25 => Some((Keycode::Num3, false)),
+            30 => Some((Keycode::Num4, true)),
+            31 => Some((Keycode::Num4, false)),
+            33 => Some((Keycode::Num5, true)),
+            34 => Some((Keycode::Num5, false)),
+            36 | 37 | 42 => Some((Keycode::C, true)),
+            38 | 43 => Some((Keycode::C, false)),
             54 => Some((Keycode::Left, false)),
             57 => Some((Keycode::Up, true)),
             90 => Some((Keycode::Up, false)),
@@ -53,7 +59,7 @@ impl FrameHost for Session {
                     keycode: Some(key),
                     scancode: None,
                     keymod: Mod::NOMOD,
-                    repeat: self.frame == 10,
+                    repeat: self.frame == 10 || self.frame == 37,
                 }
             } else {
                 Event::KeyUp {
@@ -80,11 +86,23 @@ impl FrameHost for Session {
         // arrow continues to drive the same game session through each shortcut.
         let expected_size = match frame {
             18..=20 => (320, 194),
-            0..=17 | 24..=26 => (960, 582),
+            24..=26 => (960, 582),
+            30..=32 => (1280, 776),
+            0..=17 | 33.. => (1600, 970),
             _ => (640, 388),
         };
         if self.display.window_size() != expected_size {
             return Err(format!("window size shortcut failed at frame {frame}"));
+        }
+        let expected_renderer = if (36..42).contains(&frame) {
+            RendererMode::Simple
+        } else {
+            RendererMode::Crt
+        };
+        if self.display.renderer() != expected_renderer {
+            return Err(format!(
+                "renderer toggle or key repeat failed at frame {frame}"
+            ));
         }
         Ok(controls)
     }
@@ -125,8 +143,8 @@ fn execute() -> Result<(), String> {
     replay.session.set_trace(TraceSession::replay(records)?);
     replay.session.enable_validation()?;
     let display = SdlHardware::new(true, None)?;
-    if display.window_size() != (960, 582) {
-        return Err("default replay window size is not 3x".into());
+    if display.window_size() != (1600, 970) {
+        return Err("default replay window size is not 5x".into());
     }
     let mut playback = PlaybackHost::new(display, 105);
     replay.run(&mut playback)?;
@@ -137,7 +155,7 @@ fn execute() -> Result<(), String> {
         return Err("SDL replay did not reproduce the recorded game".into());
     }
     println!(
-        "SDL session: Gold Key pickup with audio, mute toggle/repeat, 1x/2x/3x resizing, 105 presented frames and replay."
+        "SDL session: Gold Key pickup with audio, mute toggle/repeat, 1x–5x resizing, CRT/simple toggle, 105 presented frames and replay."
     );
     Ok(())
 }

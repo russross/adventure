@@ -2,6 +2,8 @@
 
 pub mod adventure;
 #[cfg(feature = "sdl")]
+mod crt_display;
+#[cfg(feature = "sdl")]
 pub mod hardware;
 pub mod input;
 pub mod recording;
