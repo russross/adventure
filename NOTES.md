@@ -407,3 +407,11 @@ The executable prints a compact keyboard reference before entering the game and 
 Console polling recognizes newly pressed Reset and Select by their prior sampled states. Fire recognition also retains its preceding sample. The initial history reproduces the cleared ROM RAM's button-edge behavior, rather than treating every currently held button as a new press. Inactivity considers joystick directions and Reset/Select, including the unused right joystick directions; fire alone does not clear the ROM's counter.
 
 Right difficulty B removes the sword from dragon avoidance reactions, and A includes it. Left difficulty selects the roar/bite countdown within each game's pair of starting values. Color/monochrome selects the room and descriptor's respective color choices. Keyboard mappings follow the [Stella manual](https://stella-emu.github.io/docs/index.html#Keyboard); the NTSC presentation palette follows [Stella's palette table](https://github.com/stella-emu/stella/blob/master/src/common/PaletteHandler.cxx).
+
+
+Startup graphics reporting
+--------------------------
+
+Each displayed client prints the native presenter’s backend once during construction, before gameplay. GPU output identifies the selected adapter name, device type, graphics API, and nonempty driver metadata from wgpu; Metal adapters can omit driver fields. CPU output identifies the CPU backend, and automatic GPU initialization fallback also reports its failure reason. CRT/simple switches reuse the presenter and do not repeat startup output. Headless execution does not create a presenter or print GPU information. Adapter selection still requests a surface-compatible high-performance hardware device.
+
+Fixed-size row-pair, frame-row, and snapshot iteration uses array chunks; GateState derives Default with Startup as its default variant. Formatting, Clippy with warnings denied, the Adventure package tests, and the headed GPU smoke check pass. One concurrent display-test run missed scripted key pickup; the isolated rerun passed. Startup selected NVIDIA GeForce RTX 2060 through Vulkan with NVIDIA driver 610.57.04. macOS remains untested.

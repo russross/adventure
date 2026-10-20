@@ -119,6 +119,7 @@ impl SdlHardware {
         // The presenter exclusively owns the window's graphics backend. Host
         // pacing remains authoritative for both direct GPU and SDL fallback.
         let display = Display::new(window, BackendPreference::from_env()?)?;
+        println!("Graphics: {}", display.backend_name());
         let pixels = TexturePixels::new(&[PixelFormatEnum::RGBA32])?;
         let events = sdl.event_pump()?;
         let audio = StreamingAudio::new(&sdl.audio()?)?;

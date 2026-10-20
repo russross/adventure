@@ -356,7 +356,7 @@ impl Video {
         for (y, (row, pixels)) in geometry
             .rows
             .iter()
-            .zip(self.frame.pixels.chunks_exact_mut(WIDTH))
+            .zip(self.frame.pixels.as_chunks_mut::<WIDTH>().0.iter_mut())
             .enumerate()
         {
             let current = PaintedRow {

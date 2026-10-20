@@ -380,10 +380,11 @@ pub struct Bat {
     pub flight_remaining: Option<NonZeroU8>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GateState {
     Open,
     Closed,
+    #[default]
     Startup,
     Closing(ClosingProgress),
     Opening(OpeningProgress),
@@ -404,12 +405,6 @@ pub struct OpeningProgress(u8);
 impl OpeningProgress {
     pub fn elapsed(self) -> u8 {
         self.0
-    }
-}
-
-impl Default for GateState {
-    fn default() -> Self {
-        Self::Startup
     }
 }
 

@@ -242,7 +242,7 @@ pub(super) fn dragon_image(state: DragonState) -> &'static [u8] {
 pub(super) fn wall_rows(bands: &[PlayfieldRow; 7]) -> [PlayfieldRow; HEIGHT] {
     let mut rows = [bands[0]; HEIGHT];
     let mut band = 0;
-    for (index, pair) in rows.chunks_exact_mut(2).enumerate() {
+    for (index, pair) in rows.as_chunks_mut::<2>().0.iter_mut().enumerate() {
         pair[0] = bands[band];
         if (104 - index) % 16 == 0 {
             band += 1;
@@ -257,7 +257,7 @@ pub(super) fn sprite_rows(bitmap: Bitmap, y: u8, slot: usize) -> [u8; HEIGHT] {
     let mut rows = [0; HEIGHT];
     let mut cursor = 0;
     let mut bits = 0;
-    for (index, pair) in rows.chunks_exact_mut(2).enumerate() {
+    for (index, pair) in rows.as_chunks_mut::<2>().0.iter_mut().enumerate() {
         pair[0] = bits;
         let row = 104 - index as u8;
         if below(row, y) && (slot == 0 || index != 0) {
@@ -277,7 +277,7 @@ pub(super) fn player_rows(y: u8, retained: bool) -> [bool; HEIGHT] {
     let mut rows = [false; HEIGHT];
     let mut visible = retained;
     let bottom = y.wrapping_sub(4);
-    for (index, pair) in rows.chunks_exact_mut(2).enumerate() {
+    for (index, pair) in rows.as_chunks_mut::<2>().0.iter_mut().enumerate() {
         pair[0] = visible;
         visible = (104 - index as u8).wrapping_sub(bottom) & 0xfc == 0;
         pair[1] = visible;
