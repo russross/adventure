@@ -5,13 +5,11 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crt_native::{BackendPreference, Display};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::keyboard::{Keycode, Mod};
 use sdl2::pixels::{Color, PixelFormat, PixelFormatEnum};
-use sdl2::rect::Rect;
-use sdl2::render::{Canvas, Texture};
 use sdl2::surface::Surface;
-use sdl2::video::Window;
 
 use crate::crt_display::CrtDisplay;
 use crate::input::{Controls, Difficulty, Direction, Joystick};
@@ -82,9 +80,8 @@ pub enum RendererMode {
 pub struct SdlHardware {
     renderer: RendererMode,
     crt: CrtDisplay,
+    display: Display,
     _sdl: sdl2::Sdl,
-    canvas: Canvas<Window>,
-    texture: Texture,
     events: sdl2::EventPump,
     keyboard: KeyboardConsole,
     next_frame: Instant,
@@ -116,29 +113,20 @@ impl SdlHardware {
             .window("Adventure", WINDOW_WIDTH * 5, WINDOW_HEIGHT * 5)
             .position_centered()
             .resizable()
+            .metal_view()
             .build()
             .map_err(|error| error.to_string())?;
-        // Default SDL selection prefers acceleration but permits a software fallback.
-        // Vsync stays disabled so the host retains its single explicit pacing point.
-        let mut canvas = window
-            .into_canvas()
-            .build()
-            .map_err(|error| error.to_string())?;
-        canvas
-            .set_logical_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-            .map_err(|error| error.to_string())?;
-        // SDL's canvas-owned texture is released with this renderer. It is private and
-        // used only with this canvas; no manual texture destruction is necessary.
-        let pixels = TexturePixels::new(&canvas.info().texture_formats)?;
-        let texture = pixels.create_texture(&mut canvas)?;
+        // The presenter exclusively owns the window's graphics backend. Host
+        // pacing remains authoritative for both direct GPU and SDL fallback.
+        let display = Display::new(window, BackendPreference::from_env()?)?;
+        let pixels = TexturePixels::new(&[PixelFormatEnum::RGBA32])?;
         let events = sdl.event_pump()?;
         let audio = StreamingAudio::new(&sdl.audio()?)?;
         Ok(Self {
             renderer,
             crt: CrtDisplay::new()?,
             _sdl: sdl,
-            canvas,
-            texture,
+            display,
             events,
             keyboard: KeyboardConsole::default(),
             next_frame: Instant::now(),
@@ -165,8 +153,8 @@ impl SdlHardware {
                     .unwrap_or_else(|| vec![0; WIDTH * HEIGHT]),
                 ..Frame::default()
             };
-            self.crt.update(&mut self.canvas, &frame)?;
-            return self.crt.save_snapshot(path);
+            self.crt.update(&self.display, &frame)?;
+            return self.crt.save_snapshot(&mut self.display, path);
         }
         let pitch = self.pixels.pitch() as u32;
         let surface = Surface::from_data(
@@ -191,7 +179,10 @@ impl SdlHardware {
     }
 
     pub fn window_size(&self) -> (u32, u32) {
-        self.canvas.window().size()
+        self.display.window().size()
+    }
+    pub fn gpu_rendering(&self) -> bool {
+        self.display.is_gpu()
     }
 }
 
@@ -241,7 +232,7 @@ impl FrameHost for SdlHardware {
                                 Keycode::Num4 => 4,
                                 _ => 5,
                             };
-                            self.canvas
+                            self.display
                                 .window_mut()
                                 .set_size(WINDOW_WIDTH * scale, WINDOW_HEIGHT * scale)
                                 .map_err(|error| error.to_string())?;
@@ -273,46 +264,45 @@ impl FrameHost for SdlHardware {
 
         // Device resets require a new texture and a complete upload even for unchanged pixels.
         if self.refresh == DisplayRefresh::RecreateTexture {
-            self.crt.reset_texture();
-            self.texture = self.pixels.create_texture(&mut self.canvas)?;
+            self.display.invalidate();
             self.indexed = None;
             self.refresh = DisplayRefresh::Redraw;
         }
         let spans = self
             .pixels
             .convert_changed_rows(&frame.pixels, self.indexed.as_deref());
-        for &(first, end) in &spans {
-            let pitch = self.pixels.pitch();
-            self.texture
-                .update(
-                    Rect::new(0, first as i32, WIDTH as u32, (end - first) as u32),
-                    &self.pixels.bytes[first * pitch..end * pitch],
-                    pitch,
-                )
-                .map_err(|error| error.to_string())?;
-        }
         self.indexed
             .get_or_insert_with(|| vec![0; WIDTH * HEIGHT])
             .copy_from_slice(&frame.pixels);
         let crt_changed = if self.renderer == RendererMode::Crt {
-            self.crt.update(&mut self.canvas, frame)?
+            self.crt.update(&self.display, frame)?
         } else {
             false
         };
         // Each redraw rebuilds the transient backbuffer; idle boundaries leave the window alone.
-        if crt_changed || !spans.is_empty() || self.refresh != DisplayRefresh::Clean {
+        if crt_changed
+            || !spans.is_empty()
+            || self.refresh != DisplayRefresh::Clean
+            || self.display.needs_present()
+        {
             self.refresh.redraw();
-            self.canvas.clear();
             match self.renderer {
-                RendererMode::Crt => self.crt.draw(&mut self.canvas)?,
-                RendererMode::Simple => self.canvas.copy(&self.texture, None, None)?,
+                RendererMode::Crt => self.crt.draw(&mut self.display, true)?,
+                RendererMode::Simple => self.display.present_rgba(
+                    &self.pixels.bytes,
+                    WIDTH as u32,
+                    HEIGHT as u32,
+                    WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+                )?,
             }
-            self.canvas.present();
             self.refresh = DisplayRefresh::Clean;
             #[cfg(test)]
             {
                 self.redraws += 1;
             }
+        } else if self.renderer == RendererMode::Crt {
+            // A timed-out or occluded GPU surface retries from retained output.
+            self.crt.draw(&mut self.display, false)?;
         }
         self.frames += 1;
 
@@ -412,12 +402,6 @@ impl TexturePixels {
 
     fn pitch(&self) -> usize {
         WIDTH * self.format.byte_size_per_pixel()
-    }
-
-    fn create_texture(&self, canvas: &mut Canvas<Window>) -> Result<Texture, String> {
-        canvas
-            .create_texture_streaming(self.format, WIDTH as u32, HEIGHT as u32)
-            .map_err(|error| error.to_string())
     }
 
     fn convert_changed_rows(

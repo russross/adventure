@@ -33,6 +33,8 @@ Every trace workflow runs the main game and an independent original-instruction 
 
 `--renderer crt` (default) uses retained NTSC/CRT rendering; `--renderer simple` uses the original palette renderer. Press C to toggle while playing or replaying. The window starts at 5x (1600×970); number-row 1–5 restores the corresponding size.
 
+Native presentation automatically uses the sibling `crt/native` GPU backend when supported and falls back to the regular CPU pipeline when unavailable. Use `CRT_BACKEND=cpu make run` to force CPU rendering or `CRT_BACKEND=gpu make run` to require a hardware GPU. Both modes preserve the host's frame pacing. `make smoke` also works with either override; GPU snapshots read back only when requested.
+
 `--frames N` bounds live play; it is required for headless live runs. `--unpaced` removes display pacing. `--snapshot FILE.bmp` saves the final displayed picture. Displayed audio uses continuous synthesis. `adventure --help` lists options and controls.
 
 

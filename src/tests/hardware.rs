@@ -125,7 +125,7 @@ fn sdl_idle_redraws_resets_uploads_and_frame_boundaries() {
         events
             .push_event(Event::Window {
                 timestamp: 0,
-                window_id: hardware.canvas.window().id(),
+                window_id: hardware.display.window().id(),
                 win_event,
             })
             .unwrap();
@@ -150,17 +150,25 @@ fn sdl_idle_redraws_resets_uploads_and_frame_boundaries() {
     frame.pixels[WIDTH + 159] = 28;
     hardware.present(&frame, &sound).unwrap();
     hardware
-        .canvas
+        .display
         .window_mut()
         .set_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .unwrap();
     hardware.sample_controls().unwrap();
-    hardware.canvas.clear();
-    hardware.canvas.copy(&hardware.texture, None, None).unwrap();
-    let rgb = hardware
-        .canvas
-        .read_pixels(None, PixelFormatEnum::RGB24)
+    hardware
+        .display
+        .present_rgba(
+            &hardware.pixels.bytes,
+            WIDTH as u32,
+            HEIGHT as u32,
+            WINDOW_WIDTH as f32 / WINDOW_HEIGHT as f32,
+        )
         .unwrap();
+    let rgba = hardware.display.capture_cpu().unwrap();
+    let rgb: Vec<_> = rgba
+        .chunks_exact(4)
+        .flat_map(|p| p[..3].iter().copied())
+        .collect();
     let expected: Vec<u8> = frame
         .pixels
         .iter()
@@ -216,25 +224,34 @@ fn stella_controls_and_aliases_remain_independent() {
 #[ignore = "requires an SDL video and audio driver"]
 fn crt_retained_updates_match_fresh_render_after_resize_and_reset() {
     let mut hardware = SdlHardware::new(false, None).unwrap();
-    hardware.canvas.window_mut().set_size(320, 194).unwrap();
+    hardware.display.window_mut().set_size(320, 194).unwrap();
     let mut frame = Frame::default();
     frame.pixels.fill(28);
     hardware.present(&frame, &Sound::default()).unwrap();
-    assert!(!hardware.crt.update(&mut hardware.canvas, &frame).unwrap());
+    assert!(!hardware.crt.update(&hardware.display, &frame).unwrap());
 
     // Motion erases old pixels and changes neighboring light through the analog filters.
     frame.pixels[60 * WIDTH + 30..60 * WIDTH + 40].fill(72);
-    hardware.crt.update(&mut hardware.canvas, &frame).unwrap();
+    hardware.crt.update(&hardware.display, &frame).unwrap();
     let mut fresh = CrtDisplay::new().unwrap();
-    fresh.update(&mut hardware.canvas, &frame).unwrap();
-    assert_eq!(hardware.crt.bytes, fresh.bytes);
+    fresh.update(&hardware.display, &frame).unwrap();
+    assert_eq!(
+        hardware.crt.snapshot(&mut hardware.display).unwrap(),
+        fresh.snapshot(&mut hardware.display).unwrap()
+    );
 
-    hardware.canvas.window_mut().set_size(640, 388).unwrap();
+    hardware.display.window_mut().set_size(640, 388).unwrap();
     hardware.sample_controls().unwrap();
-    hardware.crt.update(&mut hardware.canvas, &frame).unwrap();
-    fresh.update(&mut hardware.canvas, &frame).unwrap();
-    assert_eq!(hardware.crt.bytes, fresh.bytes);
-    hardware.crt.reset_texture();
-    assert!(hardware.crt.update(&mut hardware.canvas, &frame).unwrap());
-    assert_eq!(hardware.crt.bytes, fresh.bytes);
+    hardware.crt.update(&hardware.display, &frame).unwrap();
+    fresh.update(&hardware.display, &frame).unwrap();
+    assert_eq!(
+        hardware.crt.snapshot(&mut hardware.display).unwrap(),
+        fresh.snapshot(&mut hardware.display).unwrap()
+    );
+    hardware.display.invalidate();
+    hardware.crt.draw(&mut hardware.display, true).unwrap();
+    assert_eq!(
+        hardware.crt.snapshot(&mut hardware.display).unwrap(),
+        fresh.snapshot(&mut hardware.display).unwrap()
+    );
 }
