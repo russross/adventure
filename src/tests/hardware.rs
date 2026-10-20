@@ -24,48 +24,34 @@ fn default_audio_streams_continuous_pcm_and_mute_controls_delivery() {
 }
 
 #[test]
-fn delta_uploads_reconstruct_complete_rgb_across_frame_changes() {
-    let mut pixels = vec![0; WIDTH * HEIGHT];
+fn scene_damage_conversion_matches_complete_palette_output() {
+    let mut video = crate::video::Video::default();
+    let mut picture = crate::video::Picture::default();
+    picture.objects[0].line.color = 72;
+    picture.objects[0].rows[10] = 0xff;
     let mut output = TexturePixels::new(&[]).unwrap();
-    output.bytes.fill(255);
-    assert_eq!(output.convert_changed_rows(&pixels, None), [(0, HEIGHT)]);
-    assert!(output.bytes.iter().all(|byte| *byte == 0));
-    let previous = pixels.clone();
-    assert!(
-        output
-            .convert_changed_rows(&pixels, Some(&previous))
-            .is_empty()
-    );
-
-    // Adjacent changes coalesce; separated and final rows retain their own spans.
-    for row in [0, 1, 15, HEIGHT - 1] {
-        pixels[row * WIDTH + WIDTH - 1] = 28;
-    }
-    assert_eq!(
-        output.convert_changed_rows(&pixels, Some(&previous)),
-        [(0, 2), (15, 16), (HEIGHT - 1, HEIGHT)]
-    );
-    let expected: Vec<u8> = pixels.iter().flat_map(|color| rgb_color(*color)).collect();
-    assert_eq!(output.bytes, expected);
-
-    // A room-wide palette change and subsequent erasure replace all retained colors.
-    let previous = pixels.clone();
-    pixels.fill(72);
-    assert_eq!(
-        output.convert_changed_rows(&pixels, Some(&previous)),
-        [(0, HEIGHT)]
-    );
-    assert_eq!(
-        output.bytes,
-        pixels
+    let mut stamp = None;
+    for step in 0..8 {
+        match step {
+            1 => picture.objects[0].line.x = 40,
+            2 => picture.objects[0].rows[10] = 0,
+            3 => picture.appearance.background = 8,
+            4 => picture.objects[0].rows[HEIGHT - 1] = 0xff,
+            5 => picture.objects[0].line.x = 159,
+            6 => picture.appearance.background = 0,
+            _ => {}
+        }
+        video.paint(&picture);
+        output.convert_damage(&video.frame, stamp);
+        stamp = Some(video.frame.stamp());
+        let expected: Vec<u8> = video
+            .frame
+            .pixels()
             .iter()
             .flat_map(|color| rgb_color(*color))
-            .collect::<Vec<_>>()
-    );
-    let previous = pixels.clone();
-    pixels.fill(0);
-    output.convert_changed_rows(&pixels, Some(&previous));
-    assert!(output.bytes.iter().all(|byte| *byte == 0));
+            .collect();
+        assert_eq!(output.bytes, expected, "step {step}");
+    }
 }
 
 #[test]
@@ -83,7 +69,9 @@ fn packed_texture_formats_preserve_every_palette_color_and_snapshot() {
     ] {
         let mut output = TexturePixels::new(&[PixelFormatEnum::YV12, format]).unwrap();
         assert_eq!(output.format, format);
-        output.convert_changed_rows(&pixels, None);
+        let mut frame = Frame::default();
+        frame.pixels_mut().copy_from_slice(&pixels);
+        output.convert_damage(&frame, None);
         let pitch = output.pitch() as u32;
         let surface = Surface::from_data(
             &mut output.bytes,
@@ -142,12 +130,12 @@ fn sdl_idle_redraws_resets_uploads_and_frame_boundaries() {
         let redraws = hardware.redraws;
         hardware.present(&frame, &sound).unwrap();
         assert_eq!(hardware.redraws, redraws + 1);
-        assert_eq!(hardware.indexed.as_deref(), Some(frame.pixels.as_slice()));
+        assert_eq!(hardware.stamp, Some(frame.stamp()));
     }
 
     // Verify actual uploaded texture colors before presentation invalidates the backbuffer.
-    frame.pixels.fill(72);
-    frame.pixels[WIDTH + 159] = 28;
+    frame.pixels_mut().fill(72);
+    frame.pixels_mut()[WIDTH + 159] = 28;
     hardware.present(&frame, &sound).unwrap();
     hardware
         .display
@@ -228,12 +216,12 @@ fn crt_retained_updates_match_fresh_render_after_resize_and_reset() {
     let mut hardware = SdlHardware::new(false, None).unwrap();
     hardware.display.window_mut().set_size(320, 194).unwrap();
     let mut frame = Frame::default();
-    frame.pixels.fill(28);
+    frame.pixels_mut().fill(28);
     hardware.present(&frame, &Sound::default()).unwrap();
     assert!(!hardware.crt.update(&hardware.display, &frame).unwrap());
 
     // Motion erases old pixels and changes neighboring light through the analog filters.
-    frame.pixels[60 * WIDTH + 30..60 * WIDTH + 40].fill(72);
+    frame.pixels_mut()[60 * WIDTH + 30..60 * WIDTH + 40].fill(72);
     hardware.crt.update(&hardware.display, &frame).unwrap();
     let mut fresh = CrtDisplay::new().unwrap();
     fresh.update(&hardware.display, &frame).unwrap();
@@ -256,4 +244,42 @@ fn crt_retained_updates_match_fresh_render_after_resize_and_reset() {
         hardware.crt.snapshot(&mut hardware.display).unwrap(),
         fresh.snapshot(&mut hardware.display).unwrap()
     );
+}
+
+#[test]
+#[ignore = "requires an SDL video and audio driver"]
+fn crt_skips_simple_preparation_and_switching_prepares_current_pixels() {
+    let mut hardware = SdlHardware::new(false, None).unwrap();
+    hardware.display.window_mut().set_size(320, 194).unwrap();
+    let mut frame = Frame::default();
+    frame.pixels_mut().fill(72);
+    let unused_simple = hardware.pixels.bytes.clone();
+    hardware.present(&frame, &Sound::default()).unwrap();
+    assert_eq!(hardware.pixels.bytes, unused_simple);
+    hardware.sample_controls().unwrap();
+    hardware.present(&frame, &Sound::default()).unwrap();
+    let redraws = hardware.redraws;
+    hardware.present(&frame, &Sound::default()).unwrap();
+    assert_eq!(hardware.redraws, redraws);
+
+    // A real mode command must prepare the complete simple picture even when
+    // its source is identical to the last CRT picture.
+    hardware
+        ._sdl
+        .event()
+        .unwrap()
+        .push_event(Event::KeyDown {
+            timestamp: 0,
+            window_id: hardware.display.window().id(),
+            keycode: Some(Keycode::C),
+            scancode: None,
+            keymod: Mod::NOMOD,
+            repeat: false,
+        })
+        .unwrap();
+    hardware.present(&frame, &Sound::default()).unwrap();
+    assert_eq!(hardware.renderer(), RendererMode::Simple);
+    let mut expected = TexturePixels::new(&[PixelFormatEnum::RGBA32]).unwrap();
+    expected.convert_damage(&frame, None);
+    assert_eq!(hardware.pixels.bytes, expected.bytes);
 }

@@ -70,7 +70,8 @@ impl FrameHost for CaptureHost<'_> {
         if self.pictures.len() == self.limit {
             return Ok(None);
         }
-        self.pictures.push((frame.pixels.to_vec(), sound.channels));
+        self.pictures
+            .push((frame.pixels().to_vec(), sound.channels));
         self.sample_controls()
     }
 }

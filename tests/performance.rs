@@ -33,7 +33,7 @@ impl Host {
             return Ok(None);
         }
         self.remaining -= 1;
-        black_box(&frame.pixels);
+        black_box(frame.pixels());
         if let Some(synthesizer) = &mut self.synthesis {
             synthesizer.render(sound, &mut self.samples);
             black_box(&self.samples);

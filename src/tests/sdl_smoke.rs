@@ -149,7 +149,7 @@ fn execute() -> Result<(), String> {
     let mut playback = PlaybackHost::new(display, 105);
     replay.run(&mut playback)?;
     if playback.interrupted()
-        || replay.video.frame.pixels != game.video.frame.pixels
+        || replay.video.frame.pixels() != game.video.frame.pixels()
         || replay.world.carrying.item != game.world.carrying.item
     {
         return Err("SDL replay did not reproduce the recorded game".into());

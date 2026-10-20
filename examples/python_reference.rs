@@ -66,7 +66,7 @@ impl FrameHost for ReferenceHost<'_> {
             return Ok(None);
         }
         self.output
-            .write_all(&frame.pixels)
+            .write_all(frame.pixels())
             .map_err(|error| error.to_string())?;
         for channel in sound.channels {
             self.output

@@ -15,7 +15,7 @@ use crate::crt_display::CrtDisplay;
 use crate::input::{Controls, Difficulty, Direction, Joystick};
 use crate::sound::Sound;
 use crate::streaming_audio::StreamingAudio;
-use crate::video::{Frame, HEIGHT, WIDTH};
+use crate::video::{Frame, FrameStamp, HEIGHT, WIDTH};
 
 // Double the horizontal pixels to preserve the console's displayed proportions.
 const WINDOW_WIDTH: u32 = WIDTH as u32 * 2;
@@ -89,7 +89,7 @@ pub struct SdlHardware {
     frames: usize,
     frame_limit: Option<usize>,
     pixels: TexturePixels,
-    indexed: Option<Vec<u8>>,
+    stamp: Option<FrameStamp>,
     refresh: DisplayRefresh,
     #[cfg(test)]
     redraws: usize,
@@ -135,7 +135,7 @@ impl SdlHardware {
             frames: 0,
             frame_limit,
             pixels,
-            indexed: None,
+            stamp: None,
             refresh: DisplayRefresh::Redraw,
             #[cfg(test)]
             redraws: 0,
@@ -147,14 +147,7 @@ impl SdlHardware {
     pub fn save_snapshot(&mut self, path: &Path) -> Result<(), String> {
         if self.renderer == RendererMode::Crt {
             // Snapshot requests also work before the first presentation or after a size shortcut.
-            let frame = Frame {
-                pixels: self
-                    .indexed
-                    .clone()
-                    .unwrap_or_else(|| vec![0; WIDTH * HEIGHT]),
-                ..Frame::default()
-            };
-            self.crt.update(&self.display, &frame)?;
+            self.crt.resize(&self.display)?;
             return self.crt.save_snapshot(&mut self.display, path);
         }
         let pitch = self.pixels.pitch() as u32;
@@ -219,6 +212,7 @@ impl FrameHost for SdlHardware {
                                 RendererMode::Crt => RendererMode::Simple,
                                 RendererMode::Simple => RendererMode::Crt,
                             };
+                            self.stamp = None;
                             self.refresh.redraw();
                         }
                         Keycode::Num1
@@ -266,26 +260,23 @@ impl FrameHost for SdlHardware {
         // Device resets require a new texture and a complete upload even for unchanged pixels.
         if self.refresh == DisplayRefresh::RecreateTexture {
             self.display.invalidate();
-            self.indexed = None;
+            self.stamp = None;
             self.refresh = DisplayRefresh::Redraw;
         }
-        let spans = self
-            .pixels
-            .convert_changed_rows(&frame.pixels, self.indexed.as_deref());
-        self.indexed
-            .get_or_insert_with(|| vec![0; WIDTH * HEIGHT])
-            .copy_from_slice(&frame.pixels);
-        let crt_changed = if self.renderer == RendererMode::Crt {
-            self.crt.update(&self.display, frame)?
-        } else {
-            false
-        };
+        let changed = self.stamp != Some(frame.stamp());
+        // Only the selected renderer consumes a new picture. Display events also
+        // reach the CRT so drawable-size changes update its reconstruction view.
+        match self.renderer {
+            RendererMode::Simple if changed => {
+                self.pixels.convert_damage(frame, self.stamp);
+            }
+            RendererMode::Crt if changed || self.refresh != DisplayRefresh::Clean => {
+                self.crt.update(&self.display, frame)?;
+            }
+            _ => {}
+        }
         // Each redraw rebuilds the transient backbuffer; idle boundaries leave the window alone.
-        if crt_changed
-            || !spans.is_empty()
-            || self.refresh != DisplayRefresh::Clean
-            || self.display.needs_present()
-        {
+        if changed || self.refresh != DisplayRefresh::Clean || self.display.needs_present() {
             self.refresh.redraw();
             match self.renderer {
                 RendererMode::Crt => self.crt.draw(&mut self.display, true)?,
@@ -297,13 +288,11 @@ impl FrameHost for SdlHardware {
                 )?,
             }
             self.refresh = DisplayRefresh::Clean;
+            self.stamp = Some(frame.stamp());
             #[cfg(test)]
             {
                 self.redraws += 1;
             }
-        } else if self.renderer == RendererMode::Crt {
-            // A timed-out or occluded GPU surface retries from retained output.
-            self.crt.draw(&mut self.display, false)?;
         }
         self.frames += 1;
 
@@ -405,34 +394,21 @@ impl TexturePixels {
         WIDTH * self.format.byte_size_per_pixel()
     }
 
-    fn convert_changed_rows(
-        &mut self,
-        pixels: &[u8],
-        previous: Option<&[u8]>,
-    ) -> Vec<(usize, usize)> {
-        let mut spans = Vec::new();
-        let mut start = None;
+    fn convert_damage(&mut self, frame: &Frame, previous: Option<FrameStamp>) {
         let stride = self.format.byte_size_per_pixel();
         let pitch = self.pitch();
-        // Compare complete indexed rows so palette changes and erasures follow the same path.
-        for row in 0..HEIGHT {
-            let range = row * WIDTH..(row + 1) * WIDTH;
-            if previous.is_none_or(|old| old[range.clone()] != pixels[range.clone()]) {
-                start.get_or_insert(row);
-                for (output, color) in self.bytes[row * pitch..(row + 1) * pitch]
-                    .chunks_mut(stride)
-                    .zip(&pixels[range])
-                {
-                    output.copy_from_slice(&self.palette[usize::from(*color >> 1)][..stride]);
-                }
-            } else if let Some(first) = start.take() {
-                spans.push((first, row));
+        // Palette conversion follows scene damage; unchanged rows and horizontal
+        // prefixes/suffixes retain their packed pixels without a raster comparison.
+        for (row, span) in frame.damage_since(previous).into_iter().enumerate() {
+            let Some(span) = span else { continue };
+            for (output, color) in self.bytes
+                [row * pitch + span.start * stride..row * pitch + span.end * stride]
+                .chunks_mut(stride)
+                .zip(&frame.pixels()[row * WIDTH + span.start..row * WIDTH + span.end])
+            {
+                output.copy_from_slice(&self.palette[usize::from(*color >> 1)][..stride]);
             }
         }
-        if let Some(first) = start {
-            spans.push((first, HEIGHT));
-        }
-        spans
     }
 }
 

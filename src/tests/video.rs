@@ -1,6 +1,80 @@
 use super::*;
 
 #[test]
+fn stamped_damage_survives_skipped_pictures_and_independent_consumers() {
+    let mut video = Video::default();
+    let mut picture = Picture::default();
+    picture.objects[0].line.color = 72;
+    picture.objects[0].line.x = 20;
+    picture.objects[0].rows[10] = 0xff;
+    video.paint(&picture);
+    let slow = video.frame.stamp();
+
+    picture.objects[0].line.x = 23;
+    video.paint(&picture);
+    let fast = video.frame.stamp();
+    assert_eq!(video.frame.damage_since(Some(slow))[10], Some(20..31));
+    picture.objects[0].line.x = 26;
+    video.paint(&picture);
+    assert_eq!(video.frame.damage_since(Some(fast))[10], Some(23..34));
+    assert_eq!(video.frame.damage_since(Some(slow))[10], Some(0..WIDTH));
+    assert!(video.frame.damage_since(Some(slow))[11].is_none());
+
+    // An unchanged composition cannot discard damage an older consumer still needs.
+    video.paint(&picture);
+    assert!(video.frame.changed_rows.is_empty());
+    assert_eq!(video.frame.damage_since(Some(fast))[10], Some(23..34));
+    assert!(
+        video
+            .frame
+            .damage_since(Some(video.frame.stamp()))
+            .iter()
+            .all(Option::is_none)
+    );
+    assert!(
+        video
+            .frame
+            .damage_since(Some(Frame::default().stamp()))
+            .iter()
+            .all(|s| *s == Some(0..WIDTH))
+    );
+}
+
+#[test]
+fn damage_covers_wrapped_erasure_and_global_scene_changes() {
+    let mut video = Video::default();
+    let mut picture = Picture::default();
+    picture.objects[0].line.x = 158;
+    picture.objects[0].line.color = 72;
+    picture.objects[0].rows[10] = 0xff;
+    video.paint(&picture);
+    let before = video.frame.stamp();
+    picture.objects[0].rows[10] = 0;
+    video.paint(&picture);
+    assert_eq!(video.frame.damage_since(Some(before))[10], Some(0..WIDTH));
+    assert_eq!(video.frame.pixels, reference_picture(&picture).0);
+
+    // Palette cycling and a changed wall layout explicitly invalidate every row.
+    for palette in [true, false] {
+        let before = video.frame.stamp();
+        if palette {
+            picture.appearance.foreground = 28;
+        } else {
+            picture.walls[50] = PlayfieldRow::new(0xf0, 0xff, 0xff);
+        }
+        video.paint(&picture);
+        assert!(
+            video
+                .frame
+                .damage_since(Some(before))
+                .iter()
+                .all(|s| *s == Some(0..WIDTH))
+        );
+        assert_eq!(video.frame.pixels, reference_picture(&picture).0);
+    }
+}
+
+#[test]
 fn partial_row_blanking_removes_pixels_and_contacts_at_the_exact_edge() {
     let mut picture = Picture::default();
     picture.appearance.background = 8;

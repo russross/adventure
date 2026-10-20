@@ -1,6 +1,9 @@
 //! Complete-picture layer composition and independent geometric contacts.
 
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_FRAME: AtomicU64 = AtomicU64::new(1);
 
 pub const WIDTH: usize = 160;
 pub const HEIGHT: usize = 194;
@@ -24,6 +27,28 @@ impl Mask {
 
     fn without(self, other: Self) -> Self {
         Self(std::array::from_fn(|i| self.0[i] & !other.0[i]))
+    }
+
+    fn bounds(self) -> Option<Range<usize>> {
+        let first = self.0.iter().position(|word| *word != 0)?;
+        let last = self.0.iter().rposition(|word| *word != 0)?;
+        Some(
+            first * 64 + self.0[first].trailing_zeros() as usize
+                ..last * 64 + 64 - self.0[last].leading_zeros() as usize,
+        )
+    }
+
+    // Clip a layer before painting so unchanged pixels outside the damage stay retained.
+    fn clipped(self, range: &Range<usize>) -> Self {
+        Self(std::array::from_fn(|word| {
+            let start = range.start.saturating_sub(word * 64).min(64);
+            let end = range.end.saturating_sub(word * 64).min(64);
+            if start >= end {
+                0
+            } else {
+                self.0[word] & (u64::MAX >> (64 - (end - start))) << start
+            }
+        }))
     }
 
     // Visit only covered pixels; the unused high bits of the last word stay clear.
@@ -294,11 +319,26 @@ pub struct Contacts {
     pub objects_touch: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameStamp {
+    identity: u64,
+    revision: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RowDamage {
+    revision: u64,
+    previous: u64,
+    span: Range<usize>,
+}
+
 pub struct Frame {
-    pub pixels: Vec<u8>,
+    pub(crate) pixels: Vec<u8>,
     pub painted_lines: usize,
     /// Rows recomposed by the latest paint, including changes hidden by priority.
     pub changed_rows: Vec<Range<usize>>,
+    stamp: FrameStamp,
+    damage: [RowDamage; HEIGHT],
 }
 
 impl Default for Frame {
@@ -307,7 +347,59 @@ impl Default for Frame {
             pixels: vec![0; WIDTH * HEIGHT],
             painted_lines: 0,
             changed_rows: Vec::new(),
+            stamp: FrameStamp {
+                identity: NEXT_FRAME.fetch_add(1, Ordering::Relaxed),
+                revision: 0,
+            },
+            damage: std::array::from_fn(|_| RowDamage::default()),
         }
+    }
+}
+
+impl Frame {
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+
+    /// Direct raster replacement invalidates the complete picture for every consumer.
+    pub fn pixels_mut(&mut self) -> &mut [u8] {
+        for row in 0..HEIGHT {
+            self.mark(row, 0..WIDTH);
+        }
+        &mut self.pixels
+    }
+
+    pub fn stamp(&self) -> FrameStamp {
+        self.stamp
+    }
+
+    /// Each consumer retains its own stamp. Missing several updates to a row
+    /// conservatively refreshes that row, without retaining an unbounded journal.
+    pub fn damage_since(&self, previous: Option<FrameStamp>) -> [Option<Range<usize>>; HEIGHT] {
+        let Some(previous) = previous
+            .filter(|s| s.identity == self.stamp.identity && s.revision <= self.stamp.revision)
+        else {
+            return std::array::from_fn(|_| Some(0..WIDTH));
+        };
+        std::array::from_fn(|y| {
+            let row = &self.damage[y];
+            if row.revision <= previous.revision {
+                None
+            } else if row.previous > previous.revision {
+                Some(0..WIDTH)
+            } else {
+                Some(row.span.clone())
+            }
+        })
+    }
+
+    fn mark(&mut self, row: usize, span: Range<usize>) {
+        self.stamp.revision += 1;
+        self.damage[row] = RowDamage {
+            previous: self.damage[row].revision,
+            revision: self.stamp.revision,
+            span,
+        };
     }
 }
 
@@ -326,6 +418,37 @@ struct PaintedRow {
     colors: [u8; 4],
     foreground_priority: bool,
     visible_width: u8,
+}
+
+impl PaintedRow {
+    // Background, walls, and priority affect the complete row. Sprite changes
+    // affect only their old and new coverage, including vacated and hidden pixels.
+    fn damage(&self, next: &Self) -> Option<Range<usize>> {
+        if self.colors[..2] != next.colors[..2]
+            || self.geometry.walls != next.geometry.walls
+            || self.foreground_priority != next.foreground_priority
+            || self.visible_width != next.visible_width
+        {
+            return Some(0..WIDTH);
+        }
+        let mut mask = Mask::default();
+        if self.geometry.player != next.geometry.player {
+            mask = mask.union(self.geometry.player).union(next.geometry.player);
+        }
+        for slot in 0..2 {
+            if self.geometry.objects[slot] != next.geometry.objects[slot]
+                || self.geometry.barriers[slot] != next.geometry.barriers[slot]
+                || self.colors[slot + 2] != next.colors[slot + 2]
+            {
+                mask = mask
+                    .union(self.geometry.objects[slot])
+                    .union(next.geometry.objects[slot])
+                    .union(self.geometry.barriers[slot])
+                    .union(next.geometry.barriers[slot]);
+            }
+        }
+        mask.bounds()
+    }
 }
 
 impl Video {
@@ -352,6 +475,13 @@ impl Video {
         let appearance = picture.appearance;
         self.composed.resize(HEIGHT, None);
         self.frame.changed_rows.clear();
+        let full = self.composed.iter().zip(&geometry.rows).any(|(old, row)| {
+            old.is_none_or(|old| {
+                old.colors[..2] != [appearance.background, appearance.foreground]
+                    || old.geometry.walls != row.walls
+            })
+        });
+        let mut damage = std::array::from_fn::<_, HEIGHT, _>(|_| None);
         let mut changed_start = None;
         for (y, (row, pixels)) in geometry
             .rows
@@ -370,16 +500,25 @@ impl Video {
                 foreground_priority: appearance.walls_in_front,
                 visible_width: picture.visible_widths[y],
             };
-            if self.composed[y] == Some(current) {
+            let span = if full {
+                Some(0..WIDTH)
+            } else {
+                self.composed[y].and_then(|old| old.damage(&current))
+            };
+            self.composed[y] = Some(current);
+            let Some(span) = span else {
                 if let Some(first) = changed_start.take() {
                     self.frame.changed_rows.push(first..y);
                 }
                 continue;
-            }
+            };
+            damage[y] = Some(span.clone());
             changed_start.get_or_insert(y);
-            pixels.fill(appearance.background);
+            pixels[span.clone()].fill(appearance.background);
             let foreground = row.walls.union(row.player);
-            foreground.paint(pixels, appearance.foreground);
+            foreground
+                .clipped(&span)
+                .paint(pixels, appearance.foreground);
 
             // The first object wins over the second; foreground priority applies to both.
             for slot in [1, 0] {
@@ -387,13 +526,21 @@ impl Video {
                 if appearance.walls_in_front {
                     mask = mask.without(foreground);
                 }
-                mask.paint(pixels, picture.objects[slot].line.color);
+                mask.clipped(&span)
+                    .paint(pixels, picture.objects[slot].line.color);
             }
-            pixels[usize::from(current.visible_width).min(WIDTH)..].fill(0);
-            self.composed[y] = Some(current);
+            let blank = usize::from(current.visible_width)
+                .max(span.start)
+                .min(span.end);
+            pixels[blank..span.end].fill(0);
         }
         if let Some(first) = changed_start {
             self.frame.changed_rows.push(first..HEIGHT);
+        }
+        for (row, span) in damage.into_iter().enumerate() {
+            if let Some(span) = span {
+                self.frame.mark(row, span);
+            }
         }
         self.frame.painted_lines = HEIGHT;
     }
