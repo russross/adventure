@@ -6,11 +6,21 @@ use std::rc::Rc;
 use adventure::adventure::Adventure;
 use adventure::input::Controls;
 use adventure::recording::Recording;
-use adventure::replay::PlaybackHost;
+use adventure::replay::{PlaybackHost, ReplayHost};
 use adventure::runtime::FrameHost;
 use adventure::sound::{Channel, Sound};
 use adventure::video::Frame;
 use adventure_trace::Control;
+
+#[test]
+fn easy_recording_reaches_victory_at_its_declared_endpoint() {
+    let recording = Recording::replay(Cursor::new(include_str!("easy.record"))).unwrap();
+    let mut host = ReplayHost::new(recording.frames());
+    let mut game = Adventure::default();
+    game.session.recording = Some(RefCell::new(recording));
+    game.run(&mut host).unwrap();
+    assert!(game.world.won);
+}
 
 #[derive(Clone, Default)]
 struct Bytes(Rc<RefCell<Vec<u8>>>);

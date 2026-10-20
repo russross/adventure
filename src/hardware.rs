@@ -87,6 +87,7 @@ pub struct SdlHardware {
     next_frame: Instant,
     paced: bool,
     frames: usize,
+    last_frame_work: Duration,
     frame_limit: Option<usize>,
     pixels: TexturePixels,
     stamp: Option<FrameStamp>,
@@ -133,6 +134,7 @@ impl SdlHardware {
             next_frame: Instant::now(),
             paced,
             frames: 0,
+            last_frame_work: Duration::ZERO,
             frame_limit,
             pixels,
             stamp: None,
@@ -177,6 +179,12 @@ impl SdlHardware {
     }
     pub fn gpu_rendering(&self) -> bool {
         self.display.is_gpu()
+    }
+
+    /// Input, audio, source preparation, and presentation time, excluding pacing.
+    /// GPU execution can continue asynchronously after this host work completes.
+    pub fn last_frame_work(&self) -> Duration {
+        self.last_frame_work
     }
 }
 
@@ -251,6 +259,7 @@ impl FrameHost for SdlHardware {
         if self.frame_limit.is_some_and(|limit| self.frames >= limit) {
             return Ok(None);
         }
+        let started = Instant::now();
         let Some(controls) = self.sample_controls()? else {
             return Ok(None);
         };
@@ -295,8 +304,10 @@ impl FrameHost for SdlHardware {
             }
         }
         self.frames += 1;
+        self.last_frame_work = started.elapsed();
 
-        // No scanline sleeps or renderer vsync: this is the only pacing point.
+        // Presentation may wait for a surface image. Host pacing sleeps only for
+        // the remaining 60 Hz budget, keeping the simulation cadence independent.
         if self.paced {
             self.next_frame += Duration::from_nanos(1_000_000_000 / 60);
             if let Some(remaining) = self.next_frame.checked_duration_since(Instant::now()) {

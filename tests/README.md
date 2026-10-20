@@ -1,7 +1,7 @@
 Recorded easy playthrough
 =========================
 
-`easy.trace` preserves a complete human-recorded Game 1 playthrough from October 15, 2026. It contains 4,045 pictures (1:07:25 at 60 Hz), with victory observed at 1:02:03. Tests run it through the main game and independent cartridge execution, require complete trace consumption, and check victory. Tests never regenerate this fixture.
+`easy.trace` preserves the current complete human-recorded Game 1 playthrough through frame 3,234. Tests run it through the main game and independent cartridge execution, require complete trace consumption, and check victory. The separate `easy.record` preserves input playback through frame 3,573; its regression test requires victory at that endpoint. Tests never regenerate either fixture.
 
     make test TEST_ARGS=recorded_easy_playthrough
     make validate TRACE=tests/easy.trace

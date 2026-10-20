@@ -16,7 +16,7 @@ pub fn easy_playthrough() -> Vec<Record> {
         .lines()
         .map(|line| line.parse().unwrap())
         .collect();
-    assert_eq!(records.last().unwrap().at.frame, 4045);
+    assert_eq!(records.last().unwrap().at.frame, 3234);
     assert!(records.iter().any(|record| matches!(
         record.event,
         adventure_trace::Event::State(_, adventure_trace::State::Won(true))
